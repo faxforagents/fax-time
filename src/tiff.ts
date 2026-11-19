@@ -1,0 +1,402 @@
+/**
+ * The pixels of each page of a TIFF. The chain of pages and the tags come from the reader (./tiff-read.ts), with
+ * its checks on every offset. This module adds the strips: where each one is, how it is compressed, and its
+ * pixels as grey, 0 black to 255 white.
+ *
+ * It reads black and white and 8-bit grey or RGB pages, in strips, stored uncompressed, as PackBits, LZW,
+ * Deflate or fax coding (TIFF compression 2, 3 and 4, through ./ccitt.ts). Anything else is named and not read:
+ * tiles, JPEG, palette images, other bit depths. A strip that points outside the file, a page over the pixel
+ * limit and a strip that breaks off are refused for that page. Nothing here makes a request or keeps anything.
+ */
+import { CcittError, type Decoder, decodeStrip, type Scheme } from './ccitt.js'
+import { readTiff, type TiffPage, type TiffResult } from './tiff-read.js'
+
+export type Unreadable = 'tiles' | 'compression' | 'depth' | 'photometric' | 'strips' | 'damaged' | 'too-large' | 'no-size'
+
+export class PageError extends Error {
+  readonly kind: Unreadable
+  readonly detail: string
+  constructor(kind: Unreadable, detail = '') {
+    super(kind)
+    this.kind = kind
+    this.detail = detail
+  }
+}
+
+export interface GreyPage {
+  width: number
+  height: number
+  /** 0 black to 255 white, width by height. */
+  grey: Uint8Array
+  /** The page's size on paper, from its resolution. Null when the file gives no usable resolution. */
+  mm: { width: number; height: number } | null
+  /** Its resolution across and down, per inch, when the file gives it in inches. Null otherwise. */
+  dpi: { x: number; y: number } | null
+}
+
+const TAG = {
+  samplesPerPixel: 277,
+  rowsPerStrip: 278,
+  stripOffsets: 273,
+  stripByteCounts: 279,
+  planar: 284,
+  predictor: 317,
+  tileWidth: 322,
+  extraSamples: 338,
+  orientation: 274,
+} as const
+
+/** The values of one tag of an IFD, read with the same bounds checks as ./tiff-read.ts. */
+interface Raw {
+  values: Map<number, number[]>
+}
+
+const SIZES: Record<number, number> = { 1: 1, 3: 2, 4: 4 }
+
+function ifdOffsets(view: DataView, little: boolean, count: number): number[] {
+  const out: number[] = []
+  let offset = view.getUint32(4, little)
+  for (let i = 0; i < count; i++) {
+    out.push(offset)
+    const n = view.getUint16(offset, little)
+    offset = view.getUint32(offset + 2 + n * 12, little)
+  }
+  return out
+}
+
+function rawTags(view: DataView, little: boolean, at: number, maxValues: number): Raw {
+  const values = new Map<number, number[]>()
+  const wanted = new Set<number>(Object.values(TAG))
+  const n = view.getUint16(at, little)
+  for (let i = 0; i < n; i++) {
+    const e = at + 2 + i * 12
+    const tag = view.getUint16(e, little)
+    // The first entry of a repeated tag counts, as in ./tiff-read.ts.
+    if (!wanted.has(tag) || values.has(tag)) continue
+    const type = view.getUint16(e + 2, little)
+    const count = view.getUint32(e + 4, little)
+    const size = SIZES[type]
+    if (!size || count === 0 || count > maxValues) {
+      values.set(tag, [])
+      continue
+    }
+    const start = size * count <= 4 ? e + 8 : view.getUint32(e + 8, little)
+    if (start + size * count > view.byteLength) {
+      values.set(tag, [])
+      continue
+    }
+    const list: number[] = []
+    for (let k = 0; k < count; k++) {
+      const p = start + k * size
+      list.push(size === 1 ? view.getUint8(p) : size === 2 ? view.getUint16(p, little) : view.getUint32(p, little))
+    }
+    values.set(tag, list)
+  }
+  return { values }
+}
+
+/** Millimetres per unit of a TIFF resolution: inch (2, the default) or centimetre (3). Null for no unit. */
+const unitMm = (unit: number | undefined): number | null => (unit === undefined || unit === 2 ? 25.4 : unit === 3 ? 10 : null)
+
+/** The page's size on paper from its tags, or null when a resolution is missing, zero or in no unit. */
+export function paperMm(page: TiffPage): { width: number; height: number } | null {
+  const mm = unitMm(page.resolutionUnit)
+  const x = page.xResolution
+  const y = page.yResolution
+  if (mm === null || !x || !y || !page.width || !page.length || x.num === 0 || y.num === 0) return null
+  return { width: (page.width * mm * x.den) / x.num, height: (page.length * mm * y.den) / y.num }
+}
+
+function packBits(data: Uint8Array, expected: number): Uint8Array {
+  const out = new Uint8Array(expected)
+  let o = 0
+  let i = 0
+  while (i < data.length && o < expected) {
+    const n = ((data[i++] as number) << 24) >> 24
+    if (n >= 0) {
+      // A literal run whose bytes are not all in the strip is damage, never padding.
+      if (i + Math.min(n + 1, expected - o) > data.length) throw new PageError('damaged', 'a PackBits strip ends inside a run')
+      const len = Math.min(n + 1, expected - o)
+      out.set(data.subarray(i, i + len), o)
+      i += n + 1
+      o += len
+    } else if (n !== -128) {
+      if (i >= data.length) throw new PageError('damaged', 'a PackBits strip ends inside a run')
+      const len = Math.min(1 - n, expected - o)
+      out.fill(data[i++] as number, o, o + len)
+      o += len
+    }
+  }
+  if (o < expected) throw new PageError('damaged', 'a PackBits strip ends early')
+  return out
+}
+
+/** TIFF's LZW: codes of 9 to 12 bits, most significant bit first, a width step one code early, 256 clear, 257 end. */
+function lzw(data: Uint8Array, expected: number): Uint8Array {
+  const out = new Uint8Array(expected)
+  const prefix = new Int32Array(4096)
+  const suffix = new Uint8Array(4096)
+  const length = new Int32Array(4096)
+  for (let i = 0; i < 256; i++) {
+    suffix[i] = i
+    length[i] = 1
+    prefix[i] = -1
+  }
+  let o = 0
+  let bitPos = 0
+  let width = 9
+  let next = 258
+  let prev = -1
+  const read = (): number => {
+    let v = 0
+    for (let k = 0; k < width; k++) {
+      const at = bitPos + k
+      if (at >> 3 >= data.length) return 257
+      v = (v << 1) | (((data[at >> 3] as number) >> (7 - (at & 7))) & 1)
+    }
+    bitPos += width
+    return v
+  }
+  const write = (codeAt: number): number => {
+    const len = length[codeAt] as number
+    let c = codeAt
+    for (let k = len - 1; k >= 0; k--) {
+      if (o + k < expected) out[o + k] = suffix[c] as number
+      c = prefix[c] as number
+    }
+    o += len
+    let first = codeAt
+    while ((prefix[first] as number) >= 0) first = prefix[first] as number
+    return suffix[first] as number
+  }
+  while (o < expected) {
+    const c = read()
+    if (c === 257) break
+    if (c === 256) {
+      width = 9
+      next = 258
+      prev = -1
+      continue
+    }
+    if (prev < 0) {
+      if (c > 255) throw new PageError('damaged', 'an LZW strip starts with a code it has not defined')
+      write(c)
+      prev = c
+      continue
+    }
+    let firstByte: number
+    if (c < next) {
+      firstByte = write(c)
+      if (next < 4096) {
+        prefix[next] = prev
+        suffix[next] = firstByte
+        length[next] = (length[prev] as number) + 1
+        next++
+      }
+    } else if (c === next && next < 4096) {
+      let first = prev
+      while ((prefix[first] as number) >= 0) first = prefix[first] as number
+      prefix[next] = prev
+      suffix[next] = suffix[first] as number
+      length[next] = (length[prev] as number) + 1
+      next++
+      write(c)
+    } else {
+      throw new PageError('damaged', 'an LZW strip names a code it has not defined')
+    }
+    prev = c
+    if (next + 1 >= 1 << width && width < 12) width++
+  }
+  if (o < expected) throw new PageError('damaged', 'an LZW strip ends early')
+  return out
+}
+
+/** A Deflate strip, inflated only as far as its rows need: a strip that would inflate past them is cut there. */
+async function inflate(data: Uint8Array, expected: number): Promise<Uint8Array> {
+  const out = new Uint8Array(expected)
+  let o = 0
+  const reader = new Blob([data as Uint8Array<ArrayBuffer>]).stream().pipeThrough(new DecompressionStream('deflate')).getReader()
+  try {
+    while (o < expected) {
+      const { done, value } = await reader.read()
+      if (done) break
+      const take = Math.min(value.length, expected - o)
+      out.set(value.subarray(0, take), o)
+      o += take
+    }
+  } catch {
+    throw new PageError('damaged', 'a Deflate strip could not be read')
+  } finally {
+    reader.cancel().catch(() => {})
+  }
+  if (o < expected) throw new PageError('damaged', 'a Deflate strip ends early')
+  return out
+}
+
+const CCITT: Record<number, Scheme | undefined> = { 2: 'mh-rle', 4: 't6' }
+const COMPRESSIONS = new Set([1, 2, 3, 4, 5, 8, 32946, 32773])
+
+/** Reverses the bits of each byte, for FillOrder 2 on a strip that is not fax coded. */
+function reverseBits(data: Uint8Array): Uint8Array {
+  const out = new Uint8Array(data.length)
+  for (let i = 0; i < data.length; i++) {
+    let b = data[i] as number
+    let r = 0
+    for (let k = 0; k < 8; k++) {
+      r = (r << 1) | (b & 1)
+      b >>= 1
+    }
+    out[i] = r
+  }
+  return out
+}
+
+/**
+ * A page turned the way TIFF's Orientation tag (274) says it is seen: 1 as stored, 2 to 4 mirrored or turned
+ * half round, 5 to 8 with rows and columns swapped. The paper size turns with it. Any other value is taken as 1.
+ */
+export function orient(page: GreyPage, orientation: number): GreyPage {
+  if (orientation < 2 || orientation > 8) return page
+  const { width: w, height: h, grey } = page
+  const swap = orientation >= 5
+  const out = new Uint8Array(w * h)
+  const ow = swap ? h : w
+  const oh = swap ? w : h
+  // The stored pixel shown at each place of the turned page.
+  const from: Record<number, (x: number, y: number) => number> = {
+    2: (x, y) => y * w + (w - 1 - x),
+    3: (x, y) => (h - 1 - y) * w + (w - 1 - x),
+    4: (x, y) => (h - 1 - y) * w + x,
+    5: (x, y) => x * w + y,
+    6: (x, y) => (h - 1 - x) * w + y,
+    7: (x, y) => (h - 1 - x) * w + (w - 1 - y),
+    8: (x, y) => x * w + (w - 1 - y),
+  }
+  const at = from[orientation] as (x: number, y: number) => number
+  for (let y = 0; y < oh; y++) for (let x = 0; x < ow; x++) out[y * ow + x] = grey[at(x, y)] as number
+  const mm = page.mm && swap ? { width: page.mm.height, height: page.mm.width } : page.mm
+  const dpi = page.dpi && swap ? { x: page.dpi.y, y: page.dpi.x } : page.dpi
+  return { width: ow, height: oh, grey: out, mm, dpi }
+}
+
+export interface PageOptions {
+  /** The most pixels one page may have. */
+  maxPixels: number
+  decoder: Decoder
+}
+
+/** The grey pixels of one page of a TIFF. */
+export async function decodePage(bytes: Uint8Array, page: TiffPage, ifd: number, little: boolean, opts: PageOptions): Promise<GreyPage> {
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength)
+  const width = page.width
+  const height = page.length
+  if (!width || !height) throw new PageError('no-size')
+  if (width * height > opts.maxPixels) throw new PageError('too-large')
+  // A strip holds at least one row, so no strip list is longer than the page is high.
+  const raw = rawTags(view, little, ifd, height)
+  const one = (tag: number, dflt: number): number => raw.values.get(tag)?.[0] ?? dflt
+  if (raw.values.has(TAG.tileWidth)) throw new PageError('tiles')
+  const compression = page.compression ?? 1
+  if (!COMPRESSIONS.has(compression)) throw new PageError('compression', String(compression))
+  const spp = one(TAG.samplesPerPixel, 1)
+  const bits = page.bitsPerSample?.[0] ?? 1
+  if (page.bitsPerSample?.some((b) => b !== bits)) throw new PageError('depth', page.bitsPerSample.join(', '))
+  // With no PhotometricInterpretation a page is read as WhiteIsZero (0), as Pillow reads it.
+  const photometric = page.photometric ?? 0
+  const fax = compression >= 2 && compression <= 4
+  if (fax && (bits !== 1 || spp !== 1)) throw new PageError('depth', `${bits}`)
+  if (bits === 1 && spp !== 1) throw new PageError('depth', `${spp} samples of 1 bit`)
+  if (bits !== 1 && bits !== 8) throw new PageError('depth', `${bits}`)
+  // RGB has three samples and grey one, each with at most one extra sample, such as alpha.
+  const base = photometric === 2 ? 3 : 1
+  if (photometric > 2 || (photometric === 2 && bits !== 8) || spp < base || spp > base + 1) throw new PageError('photometric', String(photometric))
+  // TIFF 6.0, ExtraSamples: 1 is alpha already multiplied into the colour, 2 is alpha that is not, and 0 or no
+  // tag is a sample with no stated meaning, which is left out.
+  const extra = spp > base ? one(TAG.extraSamples, 0) : 0
+  if (spp > 1 && one(TAG.planar, 1) !== 1) throw new PageError('photometric', 'planar')
+  const predictor = one(TAG.predictor, 1)
+  if (predictor !== 1 && !(predictor === 2 && bits === 8)) throw new PageError('compression', `predictor ${predictor}`)
+
+  const rowsPerStrip = Math.min(one(TAG.rowsPerStrip, height), height) || height
+  const count = Math.ceil(height / rowsPerStrip)
+  const offsets = raw.values.get(TAG.stripOffsets) ?? []
+  const counts = raw.values.get(TAG.stripByteCounts) ?? []
+  if (offsets.length < count || counts.length < count) throw new PageError('strips')
+  const lsb = page.fillOrder === 2
+  const rowBytes = Math.ceil((width * bits * spp) / 8)
+  // Black and white pages are decoded to one byte per pixel, 1 where the stored bit is 1, then made grey.
+  const pels = new Uint8Array(bits === 1 ? width * height : 0)
+  const grey = new Uint8Array(width * height)
+  for (let s = 0; s < count; s++) {
+    const off = offsets[s] as number
+    const len = counts[s] as number
+    if (off + len > bytes.length) throw new PageError('strips')
+    const data = bytes.subarray(off, off + len)
+    const y0 = s * rowsPerStrip
+    const rows = Math.min(rowsPerStrip, height - y0)
+    if (fax) {
+      const scheme: Scheme = CCITT[compression] ?? ((page.t4Options ?? 0) & 1 ? 't4-2d' : 't4-1d')
+      try {
+        decodeStrip(data, scheme, width, rows, lsb, opts.decoder, pels, y0 * width)
+      } catch (err) {
+        if (err instanceof CcittError) throw new PageError('damaged', err.message)
+        throw err
+      }
+      continue
+    }
+    const expected = rowBytes * rows
+    // FillOrder 2 orders the bits of the stored bytes, so they are turned round before they are decompressed,
+    // as libtiff does. Fax coding reads its bits in either order itself.
+    const stored = lsb ? reverseBits(data) : data
+    const plain =
+      compression === 1
+        ? stored
+        : compression === 32773
+          ? packBits(stored, expected)
+          : compression === 5
+            ? lzw(stored, expected)
+            : await inflate(stored, expected)
+    if (plain.length < expected) throw new PageError('damaged', 'a strip is shorter than its rows')
+    for (let r = 0; r < rows; r++) {
+      const row = plain.subarray(r * rowBytes, (r + 1) * rowBytes)
+      const y = y0 + r
+      if (bits === 1) {
+        for (let x = 0; x < width; x++) pels[y * width + x] = ((row[x >> 3] as number) >> (7 - (x & 7))) & 1
+        continue
+      }
+      const line = predictor === 2 ? Uint8Array.from(row) : row
+      if (predictor === 2) for (let i = spp; i < line.length; i++) line[i] = ((line[i] as number) + (line[i - spp] as number)) & 255
+      for (let x = 0; x < width; x++) {
+        const p = x * spp
+        let v = photometric === 2 ? 0.299 * (line[p] as number) + 0.587 * (line[p + 1] as number) + 0.114 * (line[p + 2] as number) : (line[p] as number)
+        if (photometric === 0) v = 255 - v
+        // Over white paper: alpha multiplied in already adds the white the pixel lets through, alpha that is not
+        // mixes the two. An extra sample with no stated meaning is not alpha.
+        const alpha = extra === 1 || extra === 2 ? (line[p + base] as number) / 255 : 1
+        grey[y * width + x] = Math.min(255, Math.round(extra === 1 ? v + 255 * (1 - alpha) : v * alpha + 255 * (1 - alpha)))
+      }
+    }
+  }
+  if (bits === 1) {
+    // WhiteIsZero (0) makes a stored 1 black, BlackIsZero (1) a stored 0. Fax coding stores black runs as 1.
+    const blackIs = photometric === 1 ? 0 : 1
+    for (let i = 0; i < pels.length; i++) grey[i] = pels[i] === blackIs ? 0 : 255
+  }
+  const { xResolution: xr, yResolution: yr } = page
+  const dpi = (page.resolutionUnit ?? 2) === 2 && xr && yr && xr.den && yr.den ? { x: xr.num / xr.den, y: yr.num / yr.den } : null
+  return orient({ width, height, grey, mm: paperMm(page), dpi }, one(TAG.orientation, 1))
+}
+
+export interface TiffFile {
+  result: TiffResult
+  ifds: number[]
+  little: boolean
+}
+
+/** The page chain of a TIFF, through ./tiff-read.ts, and where each page's IFD is. */
+export function openTiff(bytes: Uint8Array, maxPages: number): TiffFile {
+  const result = readTiff(bytes, maxPages)
+  const little = result.byteOrder === 'II'
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength)
+  return { result, ifds: ifdOffsets(view, little, result.pages.length), little }
+}
