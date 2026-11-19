@@ -381,7 +381,10 @@ export async function decodePage(bytes: Uint8Array, page: TiffPage, ifd: number,
   const predictor = one(TAG.predictor, 1)
   if (predictor !== 1 && !(predictor === 2 && bits === 8)) throw new PageError('compression', `predictor ${predictor}`)
 
-  const rowsPerStrip = Math.min(one(TAG.rowsPerStrip, height), height) || height
+  // TIFF 6.0 gives RowsPerStrip 0xFFFFFFFF for one strip. Stored as a signed type that is -1, so a value below 1
+  // or not a whole number is read as no tag: the whole page in one strip.
+  const stated = one(TAG.rowsPerStrip, height)
+  const rowsPerStrip = Number.isInteger(stated) && stated >= 1 ? Math.min(stated, height) : height
   const count = Math.ceil(height / rowsPerStrip)
   const offsets = raw.values.get(TAG.stripOffsets) ?? []
   const counts = raw.values.get(TAG.stripByteCounts) ?? []
