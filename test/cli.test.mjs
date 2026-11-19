@@ -4,13 +4,14 @@ import { spawnSync } from 'node:child_process'
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { after, test } from 'node:test'
+import { test } from 'node:test'
 import { FIXTURES, pbm, ROOT } from './helpers.mjs'
 
 const CLI = join(ROOT, 'dist', 'cli.js')
 const run = (...args) => spawnSync(process.execPath, [CLI, ...args], { encoding: 'utf8' })
 const dir = mkdtempSync(join(tmpdir(), 'fax-time-test-'))
-after(() => rmSync(dir, { recursive: true, force: true }))
+// On exit, not in an after() hook: Node 20.0.0 does not run a hook at the top of a file.
+process.on('exit', () => rmSync(dir, { recursive: true, force: true }))
 
 test('fax-time <file> prints the seconds of each page and the total', () => {
   const r = run(join(FIXTURES, 'g4-3-pages.tif'))

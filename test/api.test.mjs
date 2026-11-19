@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import { cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { after, test } from 'node:test'
+import { test } from 'node:test'
 import { pathToFileURL } from 'node:url'
 import { runInNewContext } from 'node:vm'
 import {
@@ -24,7 +24,8 @@ import {
 import { fixture, ROOT } from './helpers.mjs'
 
 const dir = mkdtempSync(join(tmpdir(), 'fax-time-api-'))
-after(() => rmSync(dir, { recursive: true, force: true }))
+// On exit, not in an after() hook: Node 20.0.0 does not run a hook at the top of a file.
+process.on('exit', () => rmSync(dir, { recursive: true, force: true }))
 
 test('limits: an undefined limit keeps its default, and a limit that is not a whole number is refused', async () => {
   assert.deepEqual(DEFAULT_LIMITS, { maxPages: 1000, maxPixels: 2 ** 26, maxFilePixels: 2 ** 30 })
