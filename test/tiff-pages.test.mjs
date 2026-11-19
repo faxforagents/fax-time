@@ -87,6 +87,22 @@ test('a tag that changes the pixels and cannot be read refuses the page, and sig
   assert.equal(predictor.error, 'damaged')
 })
 
+test('a RowsPerStrip below 1, such as -1 as SLONG or SSHORT, reads the page as one strip', async () => {
+  const pixels = new Uint8Array([0, 100, 200, 255, 10, 20, 30, 40])
+  const tags = { 258: [3, [8]], 259: [3, [1]], 262: [3, [1]] }
+  const plain = await grey(tiffWithStrip(4, 2, tags, pixels))
+  assert.deepEqual([...plain.grey], [...pixels])
+  // tiffWithStrip writes -1 as its bit pattern, 0xFFFF or 0xFFFFFFFF, which the signed types read back as -1.
+  for (const [type, value] of [
+    [9, -1],
+    [8, -1],
+    [4, 0],
+  ]) {
+    const page = await grey(tiffWithStrip(4, 2, { ...tags, 278: [type, [value]] }, pixels))
+    assert.deepEqual([...page.grey], [...pixels], `RowsPerStrip ${value} as type ${type}`)
+  }
+})
+
 test('a resolution in no unit gives the shape of the pixels, not their size', async () => {
   const strip = new Uint8Array((1728 / 8) * 1100)
   const bytes = tiffWithStrip(1728, 1100, { 258: [3, [1]], 259: [3, [1]], 262: [3, [0]], 296: [3, [1]] }, strip)
