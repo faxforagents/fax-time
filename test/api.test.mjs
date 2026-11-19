@@ -68,6 +68,8 @@ test('the low-level coder refuses a run or a line it cannot code, never counting
 test('the module will not load when a quote no longer says its figure', async () => {
   const copy = join(dir, 'dist')
   cpSync(join(ROOT, 'dist'), copy, { recursive: true })
+  // The copy is out of the package, so it says itself that its files are ES modules.
+  writeFileSync(join(dir, 'package.json'), '{"type":"module"}')
   const data = join(copy, 'standards-data.js')
   const text = readFileSync(data, 'utf8')
   const changed = text.replace('sending six consecutive EOLs.', 'sending seven consecutive EOLs and a tone.')
