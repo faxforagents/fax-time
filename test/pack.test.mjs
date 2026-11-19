@@ -4,11 +4,12 @@ import { spawnSync } from 'node:child_process'
 import { mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { after, test } from 'node:test'
+import { test } from 'node:test'
 import { ROOT } from './helpers.mjs'
 
 const dir = mkdtempSync(join(tmpdir(), 'fax-time-pack-'))
-after(() => rmSync(dir, { recursive: true, force: true }))
+// On exit, not in an after() hook: Node 20.0.0 does not run a hook at the top of a file.
+process.on('exit', () => rmSync(dir, { recursive: true, force: true }))
 
 /** The pack listing npm would give for these files, in the shape of npm pack --json. */
 function check(files) {
