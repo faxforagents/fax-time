@@ -39,7 +39,8 @@ export function place(
   const k = Math.min(1, line.mm / widthMm)
   let cols = Math.min(line.pels, Math.max(1, Math.round((widthMm * k * line.pels) / line.mm)))
   let lines = Math.max(1, Math.round(heightMm * k * linesPerMm))
-  if (own) {
+  // Only whole pixels are kept: a page has a whole number of pels and lines.
+  if (own && Number.isInteger(own.width) && Number.isInteger(own.height) && own.width > 0 && own.height > 0) {
     if (own.width <= line.pels && Math.abs(own.width - cols) <= tolerance * cols) cols = own.width
     if (Math.abs(own.height - lines) <= tolerance * lines) lines = own.height
   }

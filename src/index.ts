@@ -10,7 +10,7 @@
 import { decoder } from './ccitt.js'
 import { lengthsOf, minLineBits, pageBits } from './mh.js'
 import { type CodedPage, codePage, type PageSettings } from './page.js'
-import { readPbm } from './pbm.js'
+import { eachPbm } from './pbm.js'
 import {
   CODES,
   DECODE,
@@ -48,7 +48,7 @@ export {
   seconds,
 } from './mh.js'
 export type { CodedPage, PageSettings } from './page.js'
-export { type PbmError, type PbmImage, PbmReadError, type PbmResult, readPbm } from './pbm.js'
+export { eachPbm, type PbmEnd, type PbmError, type PbmImage, PbmReadError, type PbmResult, readPbm } from './pbm.js'
 export { type Placement, place, toPels } from './raster.js'
 export {
   CODES,
@@ -278,32 +278,31 @@ export async function codeTiff(bytes: Uint8Array, options: CodeOptions = {}): Pr
 }
 
 /**
- * The scan lines of every image of a PBM file. Throws PbmReadError when the file does not start as a PBM. An
- * image that cannot be read is reported in `failed`.
+ * The scan lines of every image of a PBM file, coded one image at a time. Throws PbmReadError when the file does
+ * not start as a PBM. An image that cannot be read is reported in `failed`.
  */
 export function codePbm(bytes: Uint8Array, options: CodeOptions = {}): CodedFile {
   const limits = limitsOf(options.limits)
   const dpi = checkDpi(options.dpi)
-  const read = readPbm(bytes, limits.maxPages, limits.maxPixels)
+  const images = eachPbm(bytes, limits.maxPages, limits.maxPixels, limits.maxFilePixels)
   const pages: CodedPage[] = []
-  let pixels = 0
-  for (const [i, image] of read.images.entries()) {
-    pixels += image.width * image.height
-    if (pixels > limits.maxFilePixels) return { format: 'pbm', pages, more: read.more, damage: null, failed: overFile(i + 1) }
+  for (;;) {
+    const r = images.next()
+    if (r.done) {
+      const s = r.value.stopped
+      return { format: 'pbm', pages, more: r.value.more, damage: null, failed: s ? { page: s.image, kind: s.kind, detail: s.detail } : null }
+    }
+    const page = pages.length + 1
     try {
-      pages.push(codeBitmap({ ...image, dpi }, { limits, page: i + 1 }))
+      pages.push(codeBitmap({ ...r.value, dpi }, { limits, page }))
     } catch (err) {
       const failed =
         err instanceof PageError
-          ? { page: i + 1, kind: err.kind, detail: err.detail }
-          : { page: i + 1, kind: 'damaged' as const, detail: err instanceof Error ? err.message : '' }
+          ? { page, kind: err.kind, detail: err.detail }
+          : { page, kind: 'damaged' as const, detail: err instanceof Error ? err.message : '' }
       return { format: 'pbm', pages, more: false, damage: null, failed }
     }
   }
-  const failed = read.stopped
-    ? { page: read.stopped.image, kind: read.stopped.kind === 'not-pbm' ? ('not-pbm' as const) : read.stopped.kind, detail: read.stopped.detail }
-    : null
-  return { format: 'pbm', pages, more: read.more, damage: null, failed }
 }
 
 /** Thrown by codeFile when a file starts as neither a TIFF nor a PBM. */

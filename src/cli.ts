@@ -58,8 +58,10 @@ function dpiOf(text: string): Dpi {
 
 function whole(name: string, text: string | undefined): number | undefined {
   if (text === undefined) return undefined
-  if (!/^\d+$/.test(text)) throw new RangeError(`${name} takes a whole number, not ${text}`)
-  return Number(text)
+  const n = Number(text)
+  if (!/^\d+$/.test(text) || !Number.isSafeInteger(n))
+    throw new RangeError(`${name} takes a whole number, not ${text.length > 20 ? `${text.slice(0, 20)}...` : text}`)
+  return n
 }
 
 const pages = (n: number): string => (n === 1 ? '1 page' : `${n} pages`)
@@ -110,7 +112,10 @@ async function main(argv: string[]): Promise<number> {
   let dpi: Dpi | undefined
   let maxPages: number | undefined
   try {
-    if (values.fine && values.resolution && values.resolution !== 'fine') throw new RangeError('--fine and --resolution disagree')
+    if (values.resolution !== undefined && values.resolution !== 'standard' && values.resolution !== 'fine') {
+      throw new RangeError(`--resolution is standard or fine, not ${values.resolution || 'empty'}`)
+    }
+    if (values.fine && values.resolution === 'standard') throw new RangeError('--fine and --resolution standard disagree')
     const resolution = values.fine ? 'fine' : values.resolution
     s = settings({
       bps: whole('--rate', values.rate),

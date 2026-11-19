@@ -2,7 +2,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { decoder } from '../dist/ccitt.js'
-import { CODES, codePbm, codeTiff, DECODE, faxTime, PbmReadError, readPbm, timePage } from '../dist/index.js'
+import { CODES, codePbm, codeTiff, DECODE, eachPbm, faxTime, PbmReadError, readPbm, timePage } from '../dist/index.js'
 import { decodePage, openTiff } from '../dist/tiff.js'
 import { concat, fixture, pbm } from './helpers.mjs'
 
@@ -93,4 +93,16 @@ test('raw and plain images can follow each other, and junk after the last raw on
   assert.equal(readPbm(text('P1 1 1 1 and then some words'), 10, 1000).stopped, null)
   const junk = readPbm(concat(raw, text('junk')), 10, 1000)
   assert.deepEqual([junk.images.length, junk.stopped?.kind], [1, 'not-pbm'])
+})
+
+test('the images of a PBM file share the pixel budget, checked before an image is read', () => {
+  const image = pbm(8, 8, new Array(64).fill(1))
+  const file = concat(image, image, image)
+  const r = codePbm(file, { limits: { maxFilePixels: 128 } })
+  assert.deepEqual([r.pages.length, r.failed?.page, r.failed?.kind], [2, 3, 'too-large'])
+  assert.match(r.failed?.detail ?? '', /more pixels together/)
+  // Read one at a time: the generator gives the first image before it looks at the second.
+  const it = eachPbm(concat(image, text('P4\n8 8\n')), 10, 1000)
+  assert.equal(it.next().value.width, 8)
+  assert.equal(it.next().value.stopped?.kind, 'damaged')
 })

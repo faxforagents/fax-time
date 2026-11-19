@@ -6,7 +6,7 @@
  * 42, the offset of the first IFD, and in each IFD a count of 12-byte entries followed by the offset of the
  * next IFD, 0 after the last. BigTIFF (43 in place of 42) is recognised and not read.
  *
- * A hostile or damaged file cannot make it loop or read past the end: every offset is checked against the
+ * A damaged or oversized file cannot make it loop or read past the end: every offset is checked against the
  * length before it is used, an IFD already visited ends the chain, at most `maxPages` IFDs are read (one more
  * is only looked at, to say the file is longer), and at most MAX_VALUES values of one tag are read.
  */

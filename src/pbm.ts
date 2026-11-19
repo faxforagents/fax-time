@@ -69,42 +69,70 @@ class Cursor {
 
 const magic = (bytes: Uint8Array, at: number): string => (at + 1 < bytes.length ? String.fromCharCode(bytes[at] as number, bytes[at + 1] as number) : '')
 
-/** The images of a PBM file, up to `maxPages`, each of at most `maxPixels` pixels. */
-export function readPbm(bytes: Uint8Array, maxPages: number, maxPixels: number): PbmResult {
+/** How reading a PBM file ended, after the images it gave. */
+export interface PbmEnd {
+  more: boolean
+  stopped: PbmResult['stopped']
+}
+
+/**
+ * The images of a PBM file one at a time, up to `maxPages`, each of at most `maxPixels` pixels and all of them
+ * together of at most `maxFilePixels`. An image is read only when the one before it has been taken, so a caller
+ * that codes each image and drops it holds one image at a time. Throws PbmReadError when the file does not
+ * start with P1 or P4.
+ */
+export function* eachPbm(bytes: Uint8Array, maxPages: number, maxPixels: number, maxFilePixels = Number.POSITIVE_INFINITY): Generator<PbmImage, PbmEnd> {
   const first = magic(bytes, 0)
   if (first !== 'P1' && first !== 'P4') throw new PbmReadError('not-pbm', 'the file does not start with P1 or P4')
-  const images: PbmImage[] = []
+  let count = 0
+  let total = 0
   let at = 0
   for (;;) {
     const kind = magic(bytes, at)
     if (kind !== 'P1' && kind !== 'P4')
-      return { images, more: false, stopped: { image: images.length + 1, kind: 'not-pbm', detail: 'the data after the last image is not another PBM image' } }
-    if (images.length === maxPages) return { images, more: true, stopped: null }
+      return { more: false, stopped: { image: count + 1, kind: 'not-pbm', detail: 'the data after the last image is not another PBM image' } }
+    if (count === maxPages) return { more: true, stopped: null }
+    let image: PbmImage
+    let c: Cursor
     try {
-      const c = new Cursor(bytes, at + 2)
+      c = new Cursor(bytes, at + 2)
       // The magic number is followed by white space.
       if (!isSpace(bytes[c.pos]) && bytes[c.pos] !== 0x23) throw new PbmReadError('damaged', 'the magic number runs into the header')
       const width = c.number('width')
       const height = c.number('height')
       if (width * height > maxPixels) throw new PbmReadError('too-large', `${width} by ${height} pixels`)
+      total += width * height
+      if (total > maxFilePixels) throw new PbmReadError('too-large', 'the pages of the file have more pixels together than the limit')
       // A comment may come between the height and the white space that ends the header. It runs to, and not
       // over, the end of its line, and that line end is the white space.
       if (bytes[c.pos] === 0x23) while (c.pos < bytes.length && bytes[c.pos] !== 0x0a && bytes[c.pos] !== 0x0d) c.pos++
       // A single white space character ends the header.
       if (!isSpace(bytes[c.pos])) throw new PbmReadError('damaged', 'the header does not end in white space')
       c.pos++
-      const pixels = kind === 'P4' ? raw(bytes, c, width, height) : plain(bytes, c, width, height)
-      images.push({ width, height, pixels })
-      // Images follow each other in one file. White space at the end is no further image, and so is anything a
-      // plain image is followed by that is not another image.
-      at = c.pos
-      while (isSpace(bytes[at])) at++
-      if (at >= bytes.length) return { images, more: false, stopped: null }
-      if (kind === 'P1' && magic(bytes, at) !== 'P1' && magic(bytes, at) !== 'P4') return { images, more: false, stopped: null }
+      image = { width, height, pixels: kind === 'P4' ? raw(bytes, c, width, height) : plain(bytes, c, width, height) }
     } catch (err) {
       if (!(err instanceof PbmReadError)) throw err
-      return { images, more: false, stopped: { image: images.length + 1, kind: err.kind, detail: err.message } }
+      return { more: false, stopped: { image: count + 1, kind: err.kind, detail: err.message } }
     }
+    count++
+    yield image
+    // Images follow each other in one file. White space at the end is no further image, and so is anything a
+    // plain image is followed by that is not another image.
+    at = c.pos
+    while (isSpace(bytes[at])) at++
+    if (at >= bytes.length) return { more: false, stopped: null }
+    if (kind === 'P1' && magic(bytes, at) !== 'P1' && magic(bytes, at) !== 'P4') return { more: false, stopped: null }
+  }
+}
+
+/** The images of a PBM file at once, as eachPbm reads them. */
+export function readPbm(bytes: Uint8Array, maxPages: number, maxPixels: number, maxFilePixels = Number.POSITIVE_INFINITY): PbmResult {
+  const images: PbmImage[] = []
+  const it = eachPbm(bytes, maxPages, maxPixels, maxFilePixels)
+  for (;;) {
+    const r = it.next()
+    if (r.done) return { images, ...r.value }
+    images.push(r.value)
   }
 }
 

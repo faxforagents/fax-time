@@ -68,4 +68,7 @@ test('a narrow page with many rows to a line costs its pixels, not its pixels ti
 test('a resolution too small to give a size refuses the page and places no empty one', () => {
   assert.throws(() => codeBitmap({ width: 1, height: 1, pixels: new Uint8Array(1), dpi: { x: Number.MIN_VALUE, y: Number.MIN_VALUE } }), { kind: 'no-size' })
   assert.throws(() => place(Number.POSITIVE_INFINITY, 10, 3.85, LINE, TOLERANCE), RangeError)
+  // Own pixels that are not whole numbers are not kept: the placement stays in whole pels and lines.
+  const p = place(215, 1, 3.85, LINE, TOLERANCE, { width: 1727.5, height: 3.5 })
+  assert.deepEqual(p, { cols: 1728, left: 0, lines: 4 })
 })

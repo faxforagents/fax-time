@@ -1,4 +1,4 @@
-// The TIFF reader and decoder: what libtiff writes, the resolutions coded line for line, and hostile files.
+// The TIFF reader and decoder: what libtiff writes, the resolutions coded line for line, and damaged files.
 import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
 import { test } from 'node:test'
@@ -111,7 +111,7 @@ test('a TIFF with no photometric tag is read as WhiteIsZero, as Pillow reads it'
   assert.deepEqual([...new Set(g.grey)], [225])
 })
 
-test('a hostile TIFF is refused, or read within its own bounds, without running away', async () => {
+test('a damaged or oversized TIFF is refused, or read within its own bounds, in little time', async () => {
   const started = performance.now()
   // One pixel wide and a thousand high, no resolution: taken as 215 mm wide, so metres tall.
   const tall = tiffWithStrip(1, 1000, { 258: [3, [8]], 259: [3, [1]], 262: [3, [1]] }, new Uint8Array(1000))
@@ -127,12 +127,12 @@ test('a hostile TIFF is refused, or read within its own bounds, without running 
   const samples = tiffWithStrip(100, 100, { 258: [3, [8, 8, 8]], 259: [3, [32773]], 262: [3, [2]], 277: [3, [65535]] }, new Uint8Array(64).fill(0x80))
   assert.equal((await firstPage(samples)).error, 'photometric')
   // One grey pixel whose Deflate strip would inflate to 64 MiB and then breaks off: only the one byte is taken.
-  const bomb = deflateSync(new Uint8Array(64 * 1024 * 1024), { level: 9 })
-  const g = await firstPage(tiffWithStrip(1, 1, { 258: [3, [8]], 259: [3, [8]], 262: [3, [1]] }, bomb.subarray(0, bomb.length - 100)))
+  const zeros = deflateSync(new Uint8Array(64 * 1024 * 1024), { level: 9 })
+  const g = await firstPage(tiffWithStrip(1, 1, { 258: [3, [8]], 259: [3, [8]], 262: [3, [1]] }, zeros.subarray(0, zeros.length - 100)))
   assert.deepEqual([...g.grey], [0])
   // A page over the pixel limit is refused before its strips are read.
   assert.equal((await firstPage(tiffWithStrip(4000, 4000, { 258: [3, [1]], 259: [3, [1]] }, new Uint8Array(8)), 1_000_000)).error, 'too-large')
-  assert.ok(performance.now() - started < 10_000, 'the hostile files took too long')
+  assert.ok(performance.now() - started < 10_000, 'the damaged files took too long')
 })
 
 test('a file stops at its first bad page and keeps the pages before it', async () => {

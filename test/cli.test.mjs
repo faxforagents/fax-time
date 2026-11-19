@@ -122,6 +122,9 @@ test('--dpi 0, a clash of --fine and --resolution, and --max-pages 0 exit 2 with
     ['--fine', '--resolution', 'standard'],
     ['--max-pages', '0'],
     ['--resolution', 'superfine'],
+    ['--resolution='],
+    ['--max-pages', '9'.repeat(309)],
+    ['--max-pages', '9007199254740993'],
   ]) {
     const r = run(...args, join(FIXTURES, 'g4-fine.tif'))
     assert.equal(r.status, 2, args.join(' '))
