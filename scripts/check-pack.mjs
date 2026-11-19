@@ -1,5 +1,5 @@
 // The package holds dist, the README, the licence, the changelog and package.json, and nothing else. The files
-// the exports and the bin name are in it, and so is every file that a packed module or declaration imports.
+// the exports, the imports and the bin name are in it, and so is every file that a packed module or declaration imports.
 // Run by CI and by the publish workflow, from the root of the repository after the build.
 //
 //   npm pack --dry-run --json > pack.json && node scripts/check-pack.mjs pack.json
@@ -19,6 +19,7 @@ const named = [
   manifest.types,
   ...Object.values(manifest.bin ?? {}),
   ...Object.values(manifest.exports).flatMap((e) => (typeof e === 'string' ? [e] : Object.values(e))),
+  ...Object.values(manifest.imports ?? {}).flatMap((e) => (typeof e === 'string' ? [e] : Object.values(e))),
 ]
 const needed = [...new Set(['README.md', 'LICENSE', 'CHANGELOG.md', 'package.json', ...named.map((f) => normalize(f))])]
 const missing = needed.filter((f) => !packed.has(f))

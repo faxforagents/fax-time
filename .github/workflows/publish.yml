@@ -45,6 +45,8 @@ jobs:
       - run: npm run lint
       - run: npm run build
       - run: npm test
+      - name: A browser bundle of the package imports no Node module
+        run: npm run browser
       - name: The package holds what it should and nothing else
         run: |
           npm pack --dry-run --json > "$RUNNER_TEMP/pack.json"
