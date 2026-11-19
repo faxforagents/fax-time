@@ -37,6 +37,12 @@
     "./standards.json": "./dist/standards.json",
     "./package.json": "./package.json"
   },
+  "imports": {
+    "#inflate": {
+      "browser": "./dist/inflate-browser.js",
+      "default": "./dist/inflate-node.js"
+    }
+  },
   "bin": {
     "fax-time": "dist/cli.js"
   },
@@ -55,13 +61,15 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "lint": "biome check . && node scripts/embed-standards.mjs --check",
     "test": "node --test test/*.test.mjs",
-    "check": "npm run typecheck && npm run lint && npm run build && npm test",
+    "check": "npm run typecheck && npm run lint && npm run build && npm test && npm run browser",
     "prepack": "npm run build",
-    "standards": "node scripts/embed-standards.mjs"
+    "standards": "node scripts/embed-standards.mjs",
+    "browser": "node scripts/check-browser.mjs"
   },
   "devDependencies": {
     "@biomejs/biome": "2.6.8",
     "@types/node": "^20.19.0",
+    "esbuild": "0.28.2",
     "typescript": "^7.0.2"
   },
   "publishConfig": {

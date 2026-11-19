@@ -29,6 +29,10 @@ retries and a busy line all add time. This covers the page data only, not the ca
 It reads TIFF, including fax-coded TIFF, and PBM. It runs in Node 20 and later, has no dependencies and makes
 no network request.
 
+The library also runs in a browser, as on the fax transmission time tool. A bundler that takes the `browser`
+condition, such as Vite or esbuild, gets Deflate through `DecompressionStream` and no Node module, so it needs
+no stand-in for `node:zlib`. The command is for Node only.
+
 ## Install
 
 ```sh
@@ -188,6 +192,7 @@ npm run check
 
 The build and lint tools need the newest Node 20, 22 or 24. The package itself runs on Node 20.0 and later, and
 CI tests it on 20.0.0, 20, 22 and 24.
+`npm run browser` bundles the built package for a browser with esbuild and fails on any Node import left in it.
 
 The golden tests hold the package to the numbers the
 [fax transmission time tool](https://faxforagents.com/tools/fax-time/) gives for the same inputs. They also

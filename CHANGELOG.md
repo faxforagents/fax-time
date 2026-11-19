@@ -10,6 +10,8 @@ package of its own.
 - The rates are the DCS rates of T.30 Table 2 and 33 600 bit/s of V.34. The minimum scan line times are the five
   options of T.4 3.1.
 - `fax-time <file>` prints the seconds of each page. It reads TIFF and PBM. PDF is left for a later version.
+- It runs in a browser with no bundler shim. `#inflate` in package.json gives Deflate through zlib in Node and
+  through `DecompressionStream` in a browser. CI bundles the package for a browser and fails on any Node import.
 - A RowsPerStrip below 1, as a writer that stores the one-strip value 0xFFFFFFFF in a signed type gives it, is
   read as one strip.
 - `standards.json` holds the 42 quotes of T.4, T.30 and RFC 3949 that every figure is read from, each with its

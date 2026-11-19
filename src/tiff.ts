@@ -8,7 +8,7 @@
  * tiles, JPEG, palette images, other bit depths. A strip that points outside the file, a page over the pixel
  * limit and a strip that breaks off are refused for that page. Nothing here makes a request or keeps anything.
  */
-import { constants, inflateSync } from 'node:zlib'
+import { InflateError, inflate as inflateRows } from '#inflate'
 import { CcittError, type Decoder, decodeStrip, type Scheme } from './ccitt.js'
 import { FIELD_SIZES, fieldValue, readTiff, TAGS, type TiffPage, type TiffResult } from './tiff-read.js'
 
@@ -238,39 +238,15 @@ function lzw(data: Uint8Array, expected: number): Uint8Array {
 
 /**
  * A Deflate strip, inflated only as far as its rows need: a strip that would inflate past them is cut there.
- * zlib refuses to write more than the rows, and only such a strip is read again as a stream, up to its rows.
+ * `#inflate` is zlib in Node and DecompressionStream in a browser (package.json, "imports").
  */
 async function inflate(data: Uint8Array, expected: number): Promise<Uint8Array> {
-  let out: Uint8Array
   try {
-    out = inflateSync(data, { maxOutputLength: expected, finishFlush: constants.Z_SYNC_FLUSH })
+    return await inflateRows(data, expected)
   } catch (err) {
-    if ((err as { code?: string }).code === 'ERR_BUFFER_TOO_LARGE') return inflateStream(data, expected)
-    throw new PageError('damaged', 'a Deflate strip could not be read')
+    if (err instanceof InflateError) throw new PageError('damaged', err.message)
+    throw err
   }
-  if (out.length < expected) throw new PageError('damaged', 'a Deflate strip ends early')
-  return out
-}
-
-async function inflateStream(data: Uint8Array, expected: number): Promise<Uint8Array> {
-  const out = new Uint8Array(expected)
-  let o = 0
-  const reader = new Blob([data as Uint8Array<ArrayBuffer>]).stream().pipeThrough(new DecompressionStream('deflate')).getReader()
-  try {
-    while (o < expected) {
-      const { done, value } = await reader.read()
-      if (done) break
-      const take = Math.min(value.length, expected - o)
-      out.set(value.subarray(0, take), o)
-      o += take
-    }
-  } catch {
-    throw new PageError('damaged', 'a Deflate strip could not be read')
-  } finally {
-    reader.cancel().catch(() => {})
-  }
-  if (o < expected) throw new PageError('damaged', 'a Deflate strip ends early')
-  return out
 }
 
 const CCITT: Record<number, Scheme | undefined> = { 2: 'mh-rle', 4: 't6' }
