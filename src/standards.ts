@@ -229,7 +229,36 @@ if (SCAN_TIMES.filter((t) => t.default).length !== 1) fail('not exactly one defa
 // T.4 clause 3: "... in addition to the 20 milliseconds standard."
 if (Number(read('t4-scan-standard', /the (\d+) milliseconds standard\.$/)[1]) !== SCAN_TIMES.find((t) => t.default)?.ms)
   fail('the default time is not the standard of clause 3')
-if (!SCAN_TIMES.some((t) => t.ms === 0)) fail('no 0 ms time for a rate with error correction')
+
+/**
+ * T.30 Table 2, note 8: error correction mode requires a minimum scan line time of 0 ms. And F.3: V.34 makes
+ * error correction mandatory. So a V.34 rate runs at this time and no other.
+ */
+export const ECM_SCAN_TIME: number = Number(
+  read('t30-ecm-0ms', /^The optional T\.4 error correction mode of operation and IAFD mode require (\d+) ms of the minimum scan line time capability\.$/)[1],
+)
+if (!SCAN_TIMES.some((t) => t.ms === ECM_SCAN_TIME)) fail(`no ${ECM_SCAN_TIME} ms time for a rate with error correction`)
+read('t30-v34-ecm', /^The use of the Error Correction Mode \(ECM\) is mandatory for all facsimile messages using the V\.34 modulation system\.$/)
+
+// The rules the coder follows have no figure in them, but they rest on these sentences just the same. Each must
+// still say what the code does.
+const RULES: [string, RegExp][] = [
+  ['t4-total-line', /^The total coded scan line is defined as the sum of data bits plus any required fill bits plus the end-of-line \(EOL\) bits\.$/],
+  ['t4-white-first', /all data lines will begin with a white run length code word\.$/],
+  ['t4-black-start', /^If the actual scan line begins with a black run, a white run length of zero will be sent\.$/],
+  [
+    't4-difference',
+    /^This is then followed by the terminating code word representing the difference between the required run length and the run length represented by the make-up code\.$/,
+  ],
+  ['t4-eol-follows', /^This code word follows each line of data\.$/],
+  ['t4-eol-first', /^In addition, this signal will occur prior to the first data line of a page\.$/],
+  [
+    't4-fill',
+    /^Fill must be added to ensure that the transmission time of Data, Fill and EOL is not less than the minimum transmission time of the total coded scan line/,
+  ],
+  ['t4-fill-format', /^Format: variable length string of 0s\.$/],
+]
+for (const [id, pattern] of RULES) read(id, pattern)
 
 /** The rate a page is worked out at when none is given: 14 400 bit/s. */
 export const DEFAULT_RATE = RATES.find((r) => r.default) as Rate

@@ -31,7 +31,7 @@ export interface GreyPage {
   grey: Uint8Array
   /** The page's size on paper, from its resolution. Null when the file gives no usable resolution. */
   mm: { width: number; height: number } | null
-  /** Its resolution across and down, per inch, when the file gives it in inches. Null otherwise. */
+  /** Its resolution across and down, per inch, when the file gives it in inches or centimetres. Null otherwise. */
   dpi: { x: number; y: number } | null
   /**
    * The height of a pixel over its width, when the file gives a resolution across and down but no unit to
@@ -276,6 +276,17 @@ async function inflateStream(data: Uint8Array, expected: number): Promise<Uint8A
 const CCITT: Record<number, Scheme | undefined> = { 2: 'mh-rle', 4: 't6' }
 const COMPRESSIONS = new Set([1, 2, 3, 4, 5, 8, 32946, 32773])
 
+/** The bytes of a strip that is not fax coded, decompressed as far as its rows need. */
+async function plainStrip(data: Uint8Array, compression: number, lsb: boolean, expected: number): Promise<Uint8Array> {
+  // FillOrder 2 orders the bits of the stored bytes, so they are turned round before they are decompressed, as
+  // libtiff does. Fax coding reads its bits in either order itself.
+  const stored = lsb ? reverseBits(data) : data
+  if (compression === 1) return stored
+  if (compression === 32773) return packBits(stored, expected)
+  if (compression === 5) return lzw(stored, expected)
+  return inflate(stored, expected)
+}
+
 /** Reverses the bits of each byte, for FillOrder 2 on a strip that is not fax coded. */
 function reverseBits(data: Uint8Array): Uint8Array {
   const out = new Uint8Array(data.length)
@@ -325,11 +336,12 @@ export interface PageOptions {
   maxPixels: number
   decoder: Decoder
   /**
-   * The strip bytes the file has left to give, shared by its pages. Strips that do not overlap add up to no more
-   * than the file, so a page whose strips add up to more is refused: the work of reading strips stays in
-   * proportion to the size of the file.
+   * The strip bytes the file has left to give, shared by its pages, and the strips already counted. Each strip
+   * is counted once, however many pages share it. Strips that do not overlap add up to no more than the file,
+   * so a page whose strips add up to more is refused: the work of reading strips stays in proportion to the
+   * size of the file.
    */
-  budget?: { bytes: number }
+  budget?: { bytes: number; seen: Set<string> }
 }
 
 /** The longest strip read in fax coding or LZW, which count bits in 32-bit numbers: 256 MiB. */
@@ -379,13 +391,16 @@ export async function decodePage(bytes: Uint8Array, page: TiffPage, ifd: number,
   // Black and white pages are decoded to one byte per pixel, 1 where the stored bit is 1, then made grey.
   const pels = new Uint8Array(bits === 1 ? width * height : 0)
   const grey = new Uint8Array(width * height)
+  const decoded = new Map<string, Uint8Array>()
   for (let s = 0; s < count; s++) {
     const off = offsets[s] as number
     const len = counts[s] as number
     if (off < 0 || len < 0 || off + len > bytes.length) throw new PageError('strips')
     // A strip of no bytes holds no rows, and many of them would cost a decoder each for nothing.
     if (len === 0) throw new PageError('damaged', 'a strip holds no bytes')
-    if (opts.budget) {
+    const key = `${off}:${len}`
+    if (opts.budget && !opts.budget.seen.has(key)) {
+      opts.budget.seen.add(key)
       opts.budget.bytes -= len
       if (opts.budget.bytes < 0) throw new PageError('strips', 'the strips add up to more bytes than the file holds')
     }
@@ -398,23 +413,19 @@ export async function decodePage(bytes: Uint8Array, page: TiffPage, ifd: number,
       try {
         decodeStrip(data, scheme, width, rows, lsb, opts.decoder, pels, y0 * width)
       } catch (err) {
-        if (err instanceof CcittError) throw new PageError('damaged', err.message)
-        throw err
+        if (!(err instanceof CcittError)) throw err
+        // Bit 1 of T4Options and of T6Options allows the uncompressed mode of the fax codes, which this decoder
+        // does not read. A strip that fails with it allowed most likely uses it.
+        const options = compression === 4 ? (page.t6Options ?? 0) : compression === 3 ? (page.t4Options ?? 0) : 0
+        if (options & 2) throw new PageError('compression', 'the uncompressed mode of fax coding')
+        throw new PageError('damaged', err.message)
       }
       continue
     }
     const expected = rowBytes * rows
-    // FillOrder 2 orders the bits of the stored bytes, so they are turned round before they are decompressed,
-    // as libtiff does. Fax coding reads its bits in either order itself.
-    const stored = lsb ? reverseBits(data) : data
-    const plain =
-      compression === 1
-        ? stored
-        : compression === 32773
-          ? packBits(stored, expected)
-          : compression === 5
-            ? lzw(stored, expected)
-            : await inflate(stored, expected)
+    // A strip the page names more than once is decoded once.
+    const plain = decoded.get(`${key}:${expected}`) ?? (await plainStrip(data, compression, lsb, expected))
+    decoded.set(`${key}:${expected}`, plain)
     if (plain.length < expected) throw new PageError('damaged', 'a strip is shorter than its rows')
     for (let r = 0; r < rows; r++) {
       const row = plain.subarray(r * rowBytes, (r + 1) * rowBytes)
@@ -447,7 +458,8 @@ export async function decodePage(bytes: Uint8Array, page: TiffPage, ifd: number,
   const { xResolution: xr, yResolution: yr } = page
   const unit = page.unreadable.includes(TAGS.resolutionUnit) ? null : (page.resolutionUnit ?? 2)
   const both = xr && yr && xr.num && yr.num && xr.den && yr.den ? { x: xr.num / xr.den, y: yr.num / yr.den } : null
-  const dpi = unit === 2 ? both : null
+  // Per inch, from inches or from centimetres: the same density gives the same scan lines in either unit.
+  const dpi = both && (unit === 2 || unit === 3) ? (unit === 2 ? both : { x: both.x * 2.54, y: both.y * 2.54 }) : null
   // TIFF 6.0, ResolutionUnit: "1 = No absolute unit of measurement. Used for images that may have a non-square
   // aspect ratio, but no meaningful absolute dimensions."
   const aspect = unit === 1 && both ? both.x / both.y : null

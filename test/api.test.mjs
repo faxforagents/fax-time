@@ -91,6 +91,12 @@ test('the module will not load when a quote no longer says its figure', async ()
   assert.notEqual(changed, text)
   writeFileSync(data, changed)
   await assert.rejects(import(pathToFileURL(join(copy, 'standards.js')).href), /t4-rtc no longer says what this module reads from it/)
+  // A rule with no figure in it is held to its sentence too: here the fill of T.4 4.1.3.
+  const again = join(dir, 'again')
+  cpSync(join(ROOT, 'dist'), again, { recursive: true })
+  const fill = readFileSync(join(again, 'standards-data.js'), 'utf8').replace('Fill must be added', 'Fill may be added')
+  writeFileSync(join(again, 'standards-data.js'), fill)
+  await assert.rejects(import(pathToFileURL(join(again, 'standards.js')).href), /t4-fill no longer says/)
 })
 
 test('the exported figures are frozen, so a caller cannot reorder or change them', () => {

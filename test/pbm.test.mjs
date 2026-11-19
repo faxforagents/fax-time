@@ -106,3 +106,13 @@ test('the images of a PBM file share the pixel budget, checked before an image i
   assert.equal(it.next().value.width, 8)
   assert.equal(it.next().value.stopped?.kind, 'damaged')
 })
+
+test('after a plain image, a note that does not read as an image is the junk the format allows', () => {
+  const note = readPbm(text('P1\n8 1\n11111111\nP1 is a note\n'), 10, 1000)
+  assert.deepEqual([note.images.length, note.stopped], [1, null])
+  const commented = readPbm(text('P1\n8 1\n11111111 # end of first\nP1\n8 1\n01010101\n'), 10, 1000)
+  assert.deepEqual(
+    commented.images.map((i) => [...i.pixels].join('')),
+    ['11111111', '01010101'],
+  )
+})

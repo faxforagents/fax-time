@@ -7,7 +7,10 @@ name: publish
 # npm Trusted Publishing (OIDC): no NPM_TOKEN is needed once it is set up. It is configured on npm at Package,
 # Settings, Trusted Publisher: Owner faxforagents, Repo fax-time, Workflow publish.yml, Environment npm. npm
 # needs the package to exist before OIDC can be configured, so 0.1.0 is published once with a short-lived
-# granular token that is revoked right after.
+# granular token that is revoked right after. That token needs Read and write on packages and Bypass 2FA, since
+# the job cannot answer a one-time password, and it goes in an NPM_TOKEN secret.
+#
+# A GitHub prerelease, or a version such as 0.2.0-rc.1, goes to the next dist-tag and never to latest.
 
 on:
   release:
@@ -68,10 +71,13 @@ jobs:
       - name: Publish to npm (skip if already published)
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          PRERELEASE: ${{ github.event.release.prerelease }}
         run: |
           PKG=$(node -p "require('./package.json').version")
+          case "$PKG" in *-*) PRERELEASE=true ;; esac
+          if [ "$PRERELEASE" = "true" ]; then TAG=next; else TAG=latest; fi
           if [ "$(npm view faxforagents-fax-time@$PKG version 2>/dev/null)" = "$PKG" ]; then
             echo "faxforagents-fax-time@$PKG is already on npm, skipping"
           else
-            npm publish --provenance --access public
+            npm publish --provenance --access public --tag "$TAG"
           fi

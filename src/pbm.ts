@@ -87,6 +87,8 @@ export function* eachPbm(bytes: Uint8Array, maxPages: number, maxPixels: number,
   let count = 0
   let total = 0
   let at = 0
+  // After a plain image anything may follow that does not read as another image: the format allows it there.
+  let afterPlain = false
   for (;;) {
     const kind = magic(bytes, at)
     if (kind !== 'P1' && kind !== 'P4')
@@ -112,16 +114,19 @@ export function* eachPbm(bytes: Uint8Array, maxPages: number, maxPixels: number,
       image = { width, height, pixels: kind === 'P4' ? raw(bytes, c, width, height) : plain(bytes, c, width, height) }
     } catch (err) {
       if (!(err instanceof PbmReadError)) throw err
+      if (afterPlain) return { more: false, stopped: null }
       return { more: false, stopped: { image: count + 1, kind: err.kind, detail: err.message } }
     }
     count++
     yield image
-    // Images follow each other in one file. White space at the end is no further image, and so is anything a
-    // plain image is followed by that is not another image.
-    at = c.pos
-    while (isSpace(bytes[at])) at++
+    // Images follow each other in one file. White space and comments at the end are no further image, and so is
+    // anything a plain image is followed by that is not another image.
+    const next = new Cursor(bytes, c.pos)
+    next.skip()
+    at = next.pos
+    afterPlain = kind === 'P1'
     if (at >= bytes.length) return { more: false, stopped: null }
-    if (kind === 'P1' && magic(bytes, at) !== 'P1' && magic(bytes, at) !== 'P4') return { more: false, stopped: null }
+    if (afterPlain && magic(bytes, at) !== 'P1' && magic(bytes, at) !== 'P4') return { more: false, stopped: null }
   }
 }
 

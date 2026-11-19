@@ -54,11 +54,13 @@ export function codePage(
   let size = mm ?? { width: s.line.mm, height: (s.line.mm * height * (aspect ?? 1)) / width }
   // A fax page: as many pels as the line, across at 200 or 204 per inch, down at the lines of standard or fine.
   // Its width is the whole line and each row is one scan line of that resolution, as RFC 3949 treats them.
+  // A density from centimetres comes out a hair off a whole number per inch, so the values are compared closely.
+  const is = (list: number[], v: number): boolean => list.some((d) => Math.abs(d - v) <= d * 1e-9)
   const rows =
-    own && dpi && width === s.line.pels && s.equivalent.dpi.includes(dpi.x)
-      ? s.equivalent.standard.includes(dpi.y)
+    own && dpi && width === s.line.pels && is(s.equivalent.dpi, dpi.x)
+      ? is(s.equivalent.standard, dpi.y)
         ? 'standard'
-        : s.equivalent.fine.includes(dpi.y)
+        : is(s.equivalent.fine, dpi.y)
           ? 'fine'
           : null
       : null

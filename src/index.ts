@@ -17,6 +17,7 @@ import {
   DEFAULT_RATE,
   DEFAULT_SCAN_TIME,
   deepFreeze,
+  ECM_SCAN_TIME,
   EQUIVALENT,
   LINE,
   RATES,
@@ -57,6 +58,7 @@ export {
   DEFAULT_RATE,
   DEFAULT_SCAN_TIME,
   type DecodeTables,
+  ECM_SCAN_TIME,
   EQUIVALENT,
   LINE,
   type Line,
@@ -145,10 +147,12 @@ export function settings(s: Partial<Settings> = {}): Settings {
       `${bps} bit/s is not one of the rates this package works with: the DCS rates of T.30 Table 2 and the top rate of V.34, ${RATES.map((r) => r.bps).join(', ')}`,
     )
   }
-  const ms = s.ms ?? (rate.ecm ? 0 : DEFAULT_SCAN_TIME.ms)
+  const ms = s.ms ?? (rate.ecm ? ECM_SCAN_TIME : DEFAULT_SCAN_TIME.ms)
   if (!SCAN_TIMES.some((t) => t.ms === ms))
     throw new RangeError(`${ms} ms is not a minimum scan line time of T.4 3.1. The times are ${SCAN_TIMES.map((t) => t.ms).join(', ')}`)
-  if (rate.ecm && ms !== 0) throw new RangeError(`${bps} bit/s runs only with error correction, which T.30 gives a minimum scan line time of 0 ms`)
+  if (rate.ecm && ms !== ECM_SCAN_TIME) {
+    throw new RangeError(`${bps} bit/s runs only with error correction, which T.30 gives a minimum scan line time of ${ECM_SCAN_TIME} ms`)
+  }
   const resolution = s.resolution ?? 'standard'
   if (!RESOLUTIONS.some((r) => r.id === resolution)) throw new RangeError(`the resolution is standard or fine, not ${resolution}`)
   return { resolution, bps, ms }
@@ -268,7 +272,7 @@ export async function codeTiff(bytes: Uint8Array, options: CodeOptions = {}): Pr
   const s = pageSettings(limits)
   const { result, ifds, little } = openTiff(bytes, limits.maxPages)
   const pages: CodedPage[] = []
-  const budget = { bytes: bytes.length }
+  const budget = { bytes: bytes.length, seen: new Set<string>() }
   let pixels = 0
   for (const [i, page] of result.pages.entries()) {
     pixels += Math.max(0, page.width ?? 0) * Math.max(0, page.length ?? 0)

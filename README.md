@@ -72,6 +72,8 @@ could not be read, and when the file has more pages than `--max-pages`.
 
 ## The library
 
+From a checkout of this repository, which holds the fixture the example reads:
+
 ```js
 import { readFile } from 'node:fs/promises'
 import { faxTime } from 'faxforagents-fax-time'
@@ -125,9 +127,12 @@ which TIFF allows for the shape of its pixels.
 ## Where each figure comes from
 
 No figure is typed into the code. `src/standards.ts` reads each one out of a quote in
-[`src/standards.json`](src/standards.json), and the module will not load when a quote no longer says it. The
-build writes that file into a module, so no Node version has to import JSON. It also ships in the package as
-`faxforagents-fax-time/standards.json`, with the clause of every quote.
+[`src/standards.json`](src/standards.json). It also holds each rule the coder follows to the sentence it
+rests on, such as the fill of T.4 4.1.3. The module will not load when a quote no longer says its figure or its
+rule. The file ships in the package as `faxforagents-fax-time/standards.json`, with the clause of every quote.
+
+To change a quote, edit `src/standards.json` and run `npm run standards`. That writes it into
+`src/standards-data.ts`, so no Node version has to import JSON, and the build stops when the two differ.
 
 | Figure | Read from | Text |
 |---|---|---|
@@ -180,6 +185,9 @@ no standard. A page can take about six bytes of memory a pixel while it is read,
 npm ci
 npm run check
 ```
+
+The build and lint tools need the newest Node 20, 22 or 24. The package itself runs on Node 20.0 and later, and
+CI tests it on 20.0.0, 20, 22 and 24.
 
 The golden tests hold the package to the numbers the
 [fax transmission time tool](https://faxforagents.com/tools/fax-time/) gives for the same inputs. They also

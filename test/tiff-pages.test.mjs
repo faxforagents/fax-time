@@ -99,14 +99,15 @@ test('a resolution in no unit gives the shape of the pixels, not their size', as
   assert.deepEqual([shaped.pages[0].assumed, shaped.pages[0].standard.length], [true, 1100])
 })
 
-test('pages that all point at one strip stop once their strips add up to more than the file', async () => {
+test('pages that share one strip are each read, the strip counted once against the file', async () => {
   const page = fixture('g4-fine.tif')
   const f = openTiff(page, 1)
-  // A chain of 40 IFDs that all point at the strip of one fine page, 1728 by 2200.
+  // A chain of 4 IFDs that all point at the strip of one fine page, 1728 by 2200, as a writer may store
+  // identical pages.
   const view = new DataView(page.buffer, page.byteOffset, page.byteLength)
   const n = view.getUint16(f.ifds[0], true)
   const ifd = page.slice(f.ifds[0], f.ifds[0] + 2 + n * 12 + 4)
-  const copies = 40
+  const copies = 3
   const out = new Uint8Array(page.length + copies * ifd.length)
   out.set(page, 0)
   const o = new DataView(out.buffer)
@@ -119,7 +120,9 @@ test('pages that all point at one strip stop once their strips add up to more th
     o.setUint32(prev, 0, true)
   }
   const coded = await codeTiff(out)
-  assert.deepEqual([coded.pages.length, coded.failed?.page, coded.failed?.kind], [1, 2, 'strips'])
+  assert.deepEqual([coded.pages.length, coded.failed], [4, null])
+  const bits = coded.pages.map((p) => timePage(p, { resolution: 'fine' }).bits)
+  assert.deepEqual(bits, [633672, 633672, 633672, 633672])
 })
 
 test('the pages of a file share one pixel budget', async () => {
@@ -140,8 +143,11 @@ test('the pages of a file share one pixel budget', async () => {
   assert.match(capped.failed?.detail ?? '', /more pixels together/)
 })
 
-test('strips that add up to more than the file, or hold no bytes, are refused before they are read', async () => {
-  // 1024 one-row strips that all claim the same 1 MiB in LSB fill order: reversing each would be 1 GiB of work.
+/**
+ * A 1024 by 1024 grey page in LSB fill order, of 1024 one-row strips into one 1 MiB span: strip i starts `step(i)`
+ * bytes into the span and runs `len` bytes.
+ */
+function sharedSpan(step, len) {
   const span = new Uint8Array(1 << 20)
   const head = tiffWithStrip(1024, 1024, { 258: [3, [8]], 259: [3, [1]], 262: [3, [1]], 266: [3, [2]], 278: [4, [1]] }, new Uint8Array(0))
   // Rewrite StripOffsets and StripByteCounts as 1024 entries each, all pointing at the span.
@@ -151,8 +157,8 @@ test('strips that add up to more than the file, or hold no bytes, are refused be
   const v = new DataView(file.buffer)
   const spanAt = head.length + offsets.length + counts.length
   for (let i = 0; i < 1024; i++) {
-    v.setUint32(head.length + 4 * i, spanAt, true)
-    v.setUint32(head.length + offsets.length + 4 * i, span.length, true)
+    v.setUint32(head.length + 4 * i, spanAt + step(i), true)
+    v.setUint32(head.length + offsets.length + 4 * i, len, true)
   }
   const n = v.getUint16(8, true)
   for (let k = 0; k < n; k++) {
@@ -163,9 +169,19 @@ test('strips that add up to more than the file, or hold no bytes, are refused be
       v.setUint32(e + 8, tag === 273 ? head.length : head.length + offsets.length, true)
     }
   }
-  const started = performance.now()
-  const coded = await codeTiff(file)
-  assert.equal(coded.failed?.kind, 'strips')
+  return file
+}
+
+test('strips that add up to more than the file, or hold no bytes, are refused before they are read', async () => {
+  // The same 1 MiB named by all 1024 strips is counted and turned round once, not 1024 times.
+  let started = performance.now()
+  const same = await codeTiff(sharedSpan(() => 0, 1 << 20))
+  assert.deepEqual([same.failed, same.pages.length], [null, 1])
+  assert.ok(performance.now() - started < 2000)
+  // 1024 strips that overlap but are not the same come to 1 GiB, far past the file: refused.
+  started = performance.now()
+  const overlapping = await codeTiff(sharedSpan((i) => i, (1 << 20) - 1024))
+  assert.equal(overlapping.failed?.kind, 'strips')
   assert.ok(performance.now() - started < 2000)
   const empty = await grey(tiffWithStrip(4, 1, { 258: [3, [8]], 259: [3, [1]], 262: [3, [1]] }, new Uint8Array(0)))
   assert.equal(empty.error, 'damaged')
@@ -180,4 +196,31 @@ test('a page made of the bits the coder counts keeps its numbers through a TIFF'
   const data = rows.reduce((n, r) => n + encodeLine(r, width, CODES).length, 0)
   assert.equal(t.lines, 98)
   assert.equal(t.coded, 12 + data + 98 * 12 + 5 * 12)
+})
+
+test('a resolution in centimetres is the same density as in inches, so a fax page is still coded row for row', async () => {
+  const bytes = fixture('fax-200x100.tif').slice()
+  const f = openTiff(bytes, 1)
+  const v = new DataView(bytes.buffer)
+  const n = v.getUint16(f.ifds[0], true)
+  for (let k = 0; k < n; k++) {
+    const e = f.ifds[0] + 2 + k * 12
+    const tag = v.getUint16(e, true)
+    if (tag === 296) v.setUint16(e + 8, 3, true)
+    if (tag === 282 || tag === 283) {
+      // 10000/127 and 5000/127 per centimetre are 200 and 100 per inch exactly.
+      const at = v.getUint32(e + 8, true)
+      v.setUint32(at, tag === 282 ? 10000 : 5000, true)
+      v.setUint32(at + 4, 127, true)
+    }
+  }
+  const { pages } = await codeTiff(bytes)
+  assert.deepEqual([pages[0].standard.length, pages[0].fine.length], [1100, 2200])
+  assert.equal(timePage(pages[0]).seconds, timePage((await codeTiff(fixture('fax-200x100.tif'))).pages[0]).seconds)
+})
+
+test('a Group 4 strip in the uncompressed mode its options allow is named as a mode the reader does not read', async () => {
+  const bytes = tiffWithStrip(2, 1, { 258: [3, [1]], 259: [3, [4]], 262: [3, [0]], 293: [4, [2]] }, new Uint8Array([0x03, 0xf0, 0x20, 0x01, 0x00, 0x10]))
+  const r = await grey(bytes)
+  assert.deepEqual([r.error, r.detail], ['compression', 'the uncompressed mode of fax coding'])
 })
