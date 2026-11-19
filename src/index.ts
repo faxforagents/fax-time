@@ -1,0 +1,375 @@
+/**
+ * faxforagents-fax-time: how long the page data of a fax takes on the line, from the standards alone.
+ *
+ * Each page is laid on the T.4 scan line at standard or fine resolution and made black and white. Each scan line
+ * is coded with Tables 2 and 3a of T.4 (Modified Huffman) and given its EOL. A line shorter than the minimum scan
+ * line time gets fill, and six EOLs end the page. The bits over the modem rate are the seconds. The figure covers
+ * the page data only, not the call around it: the answer, the exchange of capabilities, the training, the
+ * confirmation after each page and any retry all add time.
+ */
+import { decoder } from './ccitt.js'
+import { lengthsOf, minLineBits, pageBits } from './mh.js'
+import { type CodedPage, codePage, type PageSettings } from './page.js'
+import { eachPbm } from './pbm.js'
+import {
+  CODES,
+  DECODE,
+  DEFAULT_RATE,
+  DEFAULT_SCAN_TIME,
+  deepFreeze,
+  ECM_SCAN_TIME,
+  EQUIVALENT,
+  LINE,
+  RATES,
+  RESOLUTIONS,
+  type ResolutionId,
+  RTC_EOLS,
+  SCAN_TIMES,
+  TOLERANCE,
+} from './standards.js'
+import { decodePage, openTiff, PageError, type Unreadable } from './tiff.js'
+
+export {
+  type CodeLengths,
+  type CodeTables,
+  type Colour,
+  type ColourCodes,
+  encodeLine,
+  fewestLineBits,
+  ituRate,
+  lengthsOf,
+  lineBits,
+  minLineBits,
+  mostLineBits,
+  type PageBits,
+  pageBits,
+  pageLineBits,
+  runBits,
+  runCode,
+  runs,
+  seconds,
+} from './mh.js'
+export type { CodedPage, PageSettings } from './page.js'
+export { eachPbm, type PbmEnd, type PbmError, type PbmImage, PbmReadError, type PbmResult, readPbm } from './pbm.js'
+export { type Placement, place, toPels } from './raster.js'
+export {
+  CODES,
+  DECODE,
+  DEFAULT_RATE,
+  DEFAULT_SCAN_TIME,
+  type DecodeTables,
+  ECM_SCAN_TIME,
+  EQUIVALENT,
+  LINE,
+  type Line,
+  MODEMS,
+  QUOTES,
+  type Quote,
+  RATES,
+  type Rate,
+  RESOLUTIONS,
+  type Resolution,
+  type ResolutionId,
+  RTC_EOLS,
+  SCAN_TIMES,
+  type ScanTime,
+  TEXTS,
+  type Text,
+  TOLERANCE,
+} from './standards.js'
+export { PageError, type Unreadable } from './tiff.js'
+export { type Damage, type Rational, readTiff, type TiffError, type TiffPage, TiffReadError, type TiffResult } from './tiff-read.js'
+export { VERSION } from './version.js'
+
+/** The bit lengths of Tables 2 and 3a and of the EOL. */
+export const LENGTHS = deepFreeze(lengthsOf(CODES))
+const DECODER = decoder({ ...CODES, extended: DECODE.extended, modes: DECODE.modes })
+
+/**
+ * Bounds on what one file may ask for. They bound the memory of a page and the work of a file, and they come
+ * from no standard. Lower them for files you do not trust.
+ */
+export interface Limits {
+  /** The most pages read from one file. The rest are counted as more. */
+  maxPages: number
+  /** The most pixels one page may have, and the most pels its scan lines may hold at fine resolution. */
+  maxPixels: number
+  /** The most pixels all the pages of one file may have together. */
+  maxFilePixels: number
+}
+
+/**
+ * 1000 pages, 2^26 pixels a page (8192 by 8192) with scan lines held to the same 2^26 pels, and 2^30 pixels a
+ * file. A page can take about six bytes of memory a pixel while it is read.
+ */
+export const DEFAULT_LIMITS: Readonly<Limits> = Object.freeze({ maxPages: 1000, maxPixels: 2 ** 26, maxFilePixels: 2 ** 30 })
+
+const limitsOf = (l: Partial<Limits> = {}): Limits => {
+  const out = { ...DEFAULT_LIMITS }
+  for (const k of Object.keys(out) as (keyof Limits)[]) {
+    const v = l[k]
+    if (v === undefined) continue
+    if (!Number.isInteger(v) || v < 1) throw new RangeError(`${k} must be a whole number of 1 or more, not ${v}`)
+    out[k] = v
+  }
+  return out
+}
+
+const linesPerMm = (id: ResolutionId): number => (RESOLUTIONS.find((r) => r.id === id) as { linesPerMm: number }).linesPerMm
+
+const pageSettings = (limits: Limits): PageSettings => ({
+  line: LINE,
+  linesPerMm: { standard: linesPerMm('standard'), fine: linesPerMm('fine') },
+  tolerance: TOLERANCE,
+  maxPixels: limits.maxPixels,
+  equivalent: EQUIVALENT,
+})
+
+/** The rate, the minimum scan line time and the resolution a page is worked out at. */
+export interface Settings {
+  /** Standard (3.85 lines/mm) or fine (7.7 lines/mm). */
+  resolution: ResolutionId
+  /** The modem rate in bit/s: one of RATES. */
+  bps: number
+  /** The minimum scan line time in milliseconds: one of SCAN_TIMES, and 0 at a rate with error correction. */
+  ms: number
+}
+
+/**
+ * Settings checked against the standards, with the defaults filled in: standard resolution, 14 400 bit/s and
+ * 20 ms. At 33 600 bit/s (V.34) T.30 makes error correction mandatory, so the time is 0 ms and no other.
+ */
+export function settings(s: Partial<Settings> = {}): Settings {
+  const bps = s.bps ?? DEFAULT_RATE.bps
+  const rate = RATES.find((r) => r.bps === bps)
+  if (!rate) {
+    throw new RangeError(
+      `${bps} bit/s is not one of the rates this package works with: the DCS rates of T.30 Table 2 and the top rate of V.34, ${RATES.map((r) => r.bps).join(', ')}`,
+    )
+  }
+  const ms = s.ms ?? (rate.ecm ? ECM_SCAN_TIME : DEFAULT_SCAN_TIME.ms)
+  if (!SCAN_TIMES.some((t) => t.ms === ms))
+    throw new RangeError(`${ms} ms is not a minimum scan line time of T.4 3.1. The times are ${SCAN_TIMES.map((t) => t.ms).join(', ')}`)
+  if (rate.ecm && ms !== ECM_SCAN_TIME) {
+    throw new RangeError(`${bps} bit/s runs only with error correction, which T.30 gives a minimum scan line time of ${ECM_SCAN_TIME} ms`)
+  }
+  const resolution = s.resolution ?? 'standard'
+  if (!RESOLUTIONS.some((r) => r.id === resolution)) throw new RangeError(`the resolution is standard or fine, not ${resolution}`)
+  return { resolution, bps, ms }
+}
+
+/** The bits and seconds of one page on the line. */
+export interface PageTime {
+  /** 1 for the first page of a file. */
+  page: number
+  resolution: ResolutionId
+  bps: number
+  ms: number
+  /** Scan lines on the page. */
+  lines: number
+  /** Code words and EOLs: the EOL before the first line, each line's data and EOL, and the rest of the RTC. */
+  coded: number
+  /** Zeros added so each line takes the minimum scan line time. */
+  fill: number
+  /** coded + fill. */
+  bits: number
+  /** bits / bps. */
+  seconds: number
+  /** True when the page gave no size on paper and was taken as the full width of the line. */
+  assumed: boolean
+}
+
+/** The bits and seconds of a coded page at the given settings. A change of settings needs no second coding. */
+export function timePage(page: CodedPage, s: Partial<Settings> = {}): PageTime {
+  const { resolution, bps, ms } = settings(s)
+  const b = pageBits(resolution === 'fine' ? page.fine : page.standard, LENGTHS.eol, RTC_EOLS, minLineBits(bps, ms))
+  return { page: page.number, resolution, bps, ms, lines: b.lines, coded: b.coded, fill: b.fill, bits: b.total, seconds: b.total / bps, assumed: page.assumed }
+}
+
+/** Pixels per inch across and down. */
+export interface Dpi {
+  x: number
+  y: number
+}
+
+/** A 1-bit page. */
+export interface Bitmap {
+  width: number
+  height: number
+  /** width × height bytes, row by row from the top: 0 for white, anything else for black. */
+  pixels: Uint8Array | Uint8ClampedArray
+  /**
+   * Pixels per inch, when known. A bitmap 1728 pixels wide at 200 or 204 across and 98 or 100 down (standard) or
+   * 196 or 200 down (fine) is coded row for row. Without a resolution the page is taken as the full width of the
+   * scan line, with square pixels.
+   */
+  dpi?: Dpi | null
+}
+
+export interface CodeOptions {
+  limits?: Partial<Limits>
+  /** The resolution of a page that gives none, such as every PBM page. */
+  dpi?: Dpi | null
+}
+
+/** The kind of a value as its own realm names it, so a Uint8Array made in another realm, such as a vm context, counts. */
+const tag = (x: unknown): string => Object.prototype.toString.call(x).slice(8, -1)
+const isBytes = (x: unknown, clamped: boolean): boolean => tag(x) === 'Uint8Array' || (clamped && tag(x) === 'Uint8ClampedArray')
+
+const checkDpi = (dpi: Dpi | null | undefined): Dpi | null => {
+  if (dpi == null) return null
+  if (!(Number.isFinite(dpi.x) && dpi.x > 0 && Number.isFinite(dpi.y) && dpi.y > 0)) throw new RangeError(`a resolution of ${dpi.x} by ${dpi.y} per inch`)
+  return { x: dpi.x, y: dpi.y }
+}
+const mmOf = (width: number, height: number, dpi: Dpi | null): { width: number; height: number } | null =>
+  dpi ? { width: (width * 25.4) / dpi.x, height: (height * 25.4) / dpi.y } : null
+
+/**
+ * The data bits of every scan line of a 1-bit page, at standard and at fine resolution. Throws PageError when the
+ * page has no size or is over the limits, and RangeError for pixels that are not bytes or too few, or a
+ * resolution that is not a positive number.
+ */
+export function codeBitmap(bitmap: Bitmap, options: CodeOptions & { page?: number } = {}): CodedPage {
+  const limits = limitsOf(options.limits)
+  const { width, height, pixels } = bitmap
+  if (!Number.isInteger(width) || !Number.isInteger(height) || width < 1 || height < 1) throw new PageError('no-size')
+  if (width * height > limits.maxPixels) throw new PageError('too-large')
+  if (!isBytes(pixels, true)) throw new RangeError('the pixels are not a Uint8Array')
+  if (pixels.length < width * height) throw new RangeError('fewer pixels than the page size')
+  const dpi = checkDpi(bitmap.dpi ?? options.dpi)
+  const grey = new Uint8Array(width * height)
+  for (let i = 0; i < grey.length; i++) grey[i] = pixels[i] ? 0 : 255
+  return codePage(options.page ?? 1, grey, width, height, mmOf(width, height, dpi), true, pageSettings(limits), LENGTHS, dpi)
+}
+
+/** A page that could not be read. The pages before it were read, and none after it is. */
+export interface PageFailure {
+  page: number
+  kind: Unreadable | 'not-pbm'
+  detail: string
+}
+
+export interface CodedFile {
+  format: 'tiff' | 'pbm'
+  pages: CodedPage[]
+  /** True when the file has more pages than maxPages. Only the first maxPages are coded. */
+  more: boolean
+  /** For a TIFF, why its chain of pages ended early, after the pages it holds. Null when it ended normally. */
+  damage: string | null
+  failed: PageFailure | null
+}
+
+/** The pixel budget of a file is spent: the page is refused before any of it is read. */
+const overFile = (page: number): PageFailure => ({ page, kind: 'too-large', detail: 'the pages of the file have more pixels together than the limit' })
+
+/**
+ * The scan lines of every page of a TIFF, one page after another. Throws TiffReadError when the file is not a
+ * TIFF or its first page cannot be found. A page that cannot be read is reported in `failed`.
+ */
+export async function codeTiff(bytes: Uint8Array, options: CodeOptions = {}): Promise<CodedFile> {
+  const limits = limitsOf(options.limits)
+  const fallback = checkDpi(options.dpi)
+  const s = pageSettings(limits)
+  const { result, ifds, little } = openTiff(bytes, limits.maxPages)
+  const pages: CodedPage[] = []
+  const budget = { bytes: bytes.length, seen: new Set<string>() }
+  let pixels = 0
+  for (const [i, page] of result.pages.entries()) {
+    pixels += Math.max(0, page.width ?? 0) * Math.max(0, page.length ?? 0)
+    if (pixels > limits.maxFilePixels) return { format: 'tiff', pages, more: result.more, damage: result.damage, failed: overFile(page.number) }
+    try {
+      const g = await decodePage(bytes, page, ifds[i] as number, little, { maxPixels: limits.maxPixels, decoder: DECODER, budget })
+      const own = g.mm === null && fallback ? { mm: mmOf(g.width, g.height, fallback), dpi: fallback } : { mm: g.mm, dpi: g.dpi }
+      pages.push(codePage(page.number, g.grey, g.width, g.height, own.mm, true, s, LENGTHS, own.dpi, own.mm === g.mm ? g.aspect : null))
+    } catch (err) {
+      const failed =
+        err instanceof PageError
+          ? { page: page.number, kind: err.kind, detail: err.detail }
+          : { page: page.number, kind: 'damaged' as const, detail: err instanceof Error ? err.message : '' }
+      return { format: 'tiff', pages, more: result.more, damage: result.damage, failed }
+    }
+  }
+  return { format: 'tiff', pages, more: result.more, damage: result.damage, failed: null }
+}
+
+/**
+ * The scan lines of every image of a PBM file, coded one image at a time. Throws PbmReadError when the file does
+ * not start as a PBM. An image that cannot be read is reported in `failed`.
+ */
+export function codePbm(bytes: Uint8Array, options: CodeOptions = {}): CodedFile {
+  const limits = limitsOf(options.limits)
+  const dpi = checkDpi(options.dpi)
+  const images = eachPbm(bytes, limits.maxPages, limits.maxPixels, limits.maxFilePixels)
+  const pages: CodedPage[] = []
+  for (;;) {
+    const r = images.next()
+    if (r.done) {
+      const s = r.value.stopped
+      return { format: 'pbm', pages, more: r.value.more, damage: null, failed: s ? { page: s.image, kind: s.kind, detail: s.detail } : null }
+    }
+    const page = pages.length + 1
+    try {
+      pages.push(codeBitmap({ ...r.value, dpi }, { limits, page }))
+    } catch (err) {
+      const failed =
+        err instanceof PageError
+          ? { page, kind: err.kind, detail: err.detail }
+          : { page, kind: 'damaged' as const, detail: err instanceof Error ? err.message : '' }
+      return { format: 'pbm', pages, more: false, damage: null, failed }
+    }
+  }
+}
+
+/** Thrown by codeFile when a file starts as neither a TIFF nor a PBM. */
+export class FormatError extends Error {
+  readonly format: 'pdf' | 'unknown'
+  constructor(format: 'pdf' | 'unknown') {
+    super(format === 'pdf' ? 'a PDF, which this version does not read: render it to a TIFF or PBM first' : 'neither a TIFF nor a PBM')
+    this.format = format
+  }
+}
+
+/**
+ * The scan lines of every page of a TIFF or PBM file, told apart by their first bytes. Throws FormatError for any
+ * other file, and what codeTiff and codePbm throw.
+ */
+export async function codeFile(bytes: Uint8Array, options: CodeOptions = {}): Promise<CodedFile> {
+  const head = String.fromCharCode(...bytes.subarray(0, 4))
+  if (head.startsWith('II') || head.startsWith('MM')) return codeTiff(bytes, options)
+  if (head.startsWith('P1') || head.startsWith('P4')) return codePbm(bytes, options)
+  throw new FormatError(head === '%PDF' ? 'pdf' : 'unknown')
+}
+
+export interface FileTime {
+  format: 'tiff' | 'pbm' | 'bitmap'
+  settings: Settings
+  pages: PageTime[]
+  /** The bits of all pages. */
+  bits: number
+  /** The seconds of all pages, page data only. */
+  seconds: number
+  more: boolean
+  damage: string | null
+  failed: PageFailure | null
+}
+
+/** The bits and seconds of every coded page of a file at the given settings. */
+export function timeFile(file: CodedFile, s: Partial<Settings> = {}): FileTime {
+  const checked = settings(s)
+  const pages = file.pages.map((p) => timePage(p, checked))
+  const bits = pages.reduce((n, p) => n + p.bits, 0)
+  return { format: file.format, settings: checked, pages, bits, seconds: bits / checked.bps, more: file.more, damage: file.damage, failed: file.failed }
+}
+
+/**
+ * The seconds of page data of a TIFF or PBM file, given as its bytes, or of one 1-bit bitmap, at the given rate,
+ * minimum scan line time and resolution. Throws RangeError for settings the standards do not allow, and what
+ * codeFile or codeBitmap throw.
+ */
+export async function faxTime(input: Uint8Array | ArrayBuffer | Bitmap, options: Partial<Settings> & CodeOptions = {}): Promise<FileTime> {
+  const s = settings(options)
+  if (tag(input) === 'ArrayBuffer') return timeFile(await codeFile(new Uint8Array(input as ArrayBuffer), options), s)
+  if (isBytes(input, false)) return timeFile(await codeFile(input as Uint8Array, options), s)
+  const page = timePage(codeBitmap(input as Bitmap, options), s)
+  return { format: 'bitmap', settings: s, pages: [page], bits: page.bits, seconds: page.seconds, more: false, damage: null, failed: null }
+}

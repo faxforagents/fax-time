@@ -1,0 +1,21 @@
+# Weekly grouped dependency updates. Minor and patch bumps arrive as one PR per ecosystem. Majors come as
+# their own PRs.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule: { interval: weekly, day: monday }
+    groups:
+      actions-minor:
+        update-types: [minor, patch]
+  - package-ecosystem: npm
+    directory: /
+    schedule: { interval: weekly, day: monday }
+    groups:
+      npm-minor:
+        update-types: [minor, patch]
+    ignore:
+      # @types/node follows the oldest Node the package supports, which is 20. Its majors would let code use
+      # APIs that Node 20 does not have.
+      - dependency-name: "@types/node"
+        update-types: ["version-update:semver-major"]

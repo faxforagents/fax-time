@@ -1,0 +1,169 @@
+{
+  "decode": {
+    "page-g3-1d.tif": {
+      "sha": "ae8d1d9f2291848d4b63d51d0f856b5afb0ff8a9a5232abb72e0adf1e23c9505",
+      "lines": 300
+    },
+    "page-g3-2d.tif": {
+      "sha": "ae8d1d9f2291848d4b63d51d0f856b5afb0ff8a9a5232abb72e0adf1e23c9505",
+      "lines": 300
+    },
+    "page-g3-2d-aligned-lsb.tif": {
+      "sha": "ae8d1d9f2291848d4b63d51d0f856b5afb0ff8a9a5232abb72e0adf1e23c9505",
+      "lines": 300
+    },
+    "page-g4.tif": {
+      "sha": "ae8d1d9f2291848d4b63d51d0f856b5afb0ff8a9a5232abb72e0adf1e23c9505",
+      "lines": 300
+    },
+    "page-mh-rle.tif": {
+      "sha": "ae8d1d9f2291848d4b63d51d0f856b5afb0ff8a9a5232abb72e0adf1e23c9505",
+      "lines": 300
+    },
+    "page-raw.tif": {
+      "sha": "ae8d1d9f2291848d4b63d51d0f856b5afb0ff8a9a5232abb72e0adf1e23c9505",
+      "lines": 300
+    },
+    "page-packbits.tif": {
+      "sha": "ae8d1d9f2291848d4b63d51d0f856b5afb0ff8a9a5232abb72e0adf1e23c9505",
+      "lines": 300
+    },
+    "page-lzw.tif": {
+      "sha": "ae8d1d9f2291848d4b63d51d0f856b5afb0ff8a9a5232abb72e0adf1e23c9505",
+      "lines": 300
+    },
+    "page-deflate.tif": {
+      "sha": "ae8d1d9f2291848d4b63d51d0f856b5afb0ff8a9a5232abb72e0adf1e23c9505",
+      "lines": 300
+    },
+    "page-packbits-lsb.tif": {
+      "sha": "ae8d1d9f2291848d4b63d51d0f856b5afb0ff8a9a5232abb72e0adf1e23c9505",
+      "lines": 300
+    },
+    "page-lzw-lsb.tif": {
+      "sha": "ae8d1d9f2291848d4b63d51d0f856b5afb0ff8a9a5232abb72e0adf1e23c9505",
+      "lines": 300
+    },
+    "page-raw-lsb.tif": {
+      "sha": "f815c22201521c361a4269299d680e051dfae62e4100934be67b2ac46fcf3089",
+      "lines": 300
+    }
+  },
+  "orientation": {
+    "orientation-1.tif": {
+      "sha": "597a27d3ed2c16a481c1b686e3c66e7df84934dab93d487968f634967a4ae4f2"
+    },
+    "orientation-2.tif": {
+      "sha": "2859f6ba6f45ab7cf27158db123e6205b818d9c447193e70d5d07810ce300067"
+    },
+    "orientation-3.tif": {
+      "sha": "fd0e7580217a9a40de5954fc8627028f427a24a54f2f6a0f04dd9e416ca5ea4b"
+    },
+    "orientation-4.tif": {
+      "sha": "1f32bb20b39d9b1010ece3df9f480c5bc54e60825453442af92c4b9d6100eb8a"
+    },
+    "orientation-5.tif": {
+      "sha": "ebdd3588e4c22d6e94297361c9ad88f9a670c8ba07eb881dafff64ad382d2307"
+    },
+    "orientation-6.tif": {
+      "sha": "d36d1b21b87fd9f0c53ff663299bf28fd97a3e4de34c215ec2cc59478a624b0e"
+    },
+    "orientation-7.tif": {
+      "sha": "38b899379d5e8c17b7d45f9c7bf8721ba06bbdf58af19765d50ea421c6c492f6"
+    },
+    "orientation-8.tif": {
+      "sha": "d431fa9e5ab13971fd4c3776191395d30e49467a496170478a8e330e2b73fe8b"
+    }
+  },
+  "line-for-line": {
+    "fax-200x100.tif": {
+      "standard": 1100,
+      "fine": 2200
+    },
+    "fax-204x98.tif": {
+      "standard": 1100,
+      "fine": 2200
+    },
+    "fax-200x200.tif": {
+      "standard": 1100,
+      "fine": 2200
+    },
+    "fax-204x196.tif": {
+      "standard": 1100,
+      "fine": 2200
+    }
+  },
+  "golden": {
+    "g3-standard.tif": {
+      "resolution": "standard",
+      "pages": [
+        {
+          "lines": 1100,
+          "coded": 63786,
+          "fill": 253086
+        }
+      ]
+    },
+    "g3-2d-standard.tif": {
+      "resolution": "standard",
+      "pages": [
+        {
+          "lines": 1100,
+          "coded": 63786,
+          "fill": 253086
+        }
+      ]
+    },
+    "g4-fine.tif": {
+      "resolution": "fine",
+      "pages": [
+        {
+          "lines": 2200,
+          "coded": 132091,
+          "fill": 501581
+        }
+      ]
+    },
+    "g4-3-pages.tif": {
+      "resolution": "standard",
+      "pages": [
+        {
+          "lines": 1100,
+          "coded": 64128,
+          "fill": 252744
+        },
+        {
+          "lines": 1100,
+          "coded": 62081,
+          "fill": 254791
+        },
+        {
+          "lines": 1100,
+          "coded": 64452,
+          "fill": 252420
+        }
+      ],
+      "also": {
+        "bps": 4800,
+        "ms": 10,
+        "pages": [
+          {
+            "lines": 1100,
+            "coded": 64128,
+            "fill": 11959
+          },
+          {
+            "lines": 1100,
+            "coded": 62081,
+            "fill": 12154
+          },
+          {
+            "lines": 1100,
+            "coded": 64452,
+            "fill": 11618
+          }
+        ]
+      }
+    }
+  }
+}

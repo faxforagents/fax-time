@@ -1,0 +1,83 @@
+name: publish
+
+# Publishes faxforagents-fax-time to npm with provenance when a GitHub Release is published. A manual run must be
+# started on a release tag (v0.1.0 and so on), and both kinds of run check that the tag is the version.
+# Actions pinned by SHA, the same pins as faxforagents/mcp.
+#
+# npm Trusted Publishing (OIDC): no NPM_TOKEN is needed once it is set up. It is configured on npm at Package,
+# Settings, Trusted Publisher: Owner faxforagents, Repo fax-time, Workflow publish.yml, Environment npm. npm
+# needs the package to exist before OIDC can be configured, so 0.1.0 is published once with a short-lived
+# granular token that is revoked right after. That token needs Read and write on packages and Bypass 2FA, since
+# the job cannot answer a one-time password, and it goes in an NPM_TOKEN secret.
+#
+# A GitHub prerelease, or a version such as 0.2.0-rc.1, goes to the next dist-tag and never to latest.
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment:
+      name: npm
+      url: https://www.npmjs.com/package/faxforagents-fax-time
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "22"
+          registry-url: "https://registry.npmjs.org"
+      - name: Only a release tag is published
+        run: |
+          case "$GITHUB_REF" in
+            refs/tags/v*) echo "publishing $GITHUB_REF_NAME" ;;
+            *) echo "::error::run this on a release tag such as v0.1.0, not $GITHUB_REF"; exit 1 ;;
+          esac
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run lint
+      - run: npm run build
+      - run: npm test
+      - name: The package holds what it should and nothing else
+        run: |
+          npm pack --dry-run --json > "$RUNNER_TEMP/pack.json"
+          node scripts/check-pack.mjs "$RUNNER_TEMP/pack.json"
+
+      - name: Assert the tag matches package.json and src/version.ts
+        run: |
+          TAG="${GITHUB_REF_NAME#v}"
+          PKG="$(node -p "require('./package.json').version")"
+          SRC="$(node -p "require('fs').readFileSync('src/version.ts','utf8').match(/'([^']+)'/)[1]")"
+          if [ "$TAG" != "$PKG" ] || [ "$TAG" != "$SRC" ]; then
+            echo "::error::release tag ($TAG) does not match package.json ($PKG) or src/version.ts ($SRC)"
+            exit 1
+          fi
+          echo "tag and versions agree: $PKG"
+
+      # npm 11.5.1 or later is required for OIDC trusted publishing. 11 runs on the Node 22 of this job.
+      - run: npm install -g npm@11
+
+      # The step publishes with the NPM_TOKEN secret when one is set, such as the granular token of the first
+      # publish, and with the OIDC exchange when none is. Provenance comes from the id-token permission either
+      # way. faxforagents/mcp keeps the same fallback while npm does not yet match the immutable OIDC subject
+      # format of GitHub (npm/cli issue 9969).
+      - name: Publish to npm (skip if already published)
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          PRERELEASE: ${{ github.event.release.prerelease }}
+        run: |
+          PKG=$(node -p "require('./package.json').version")
+          case "$PKG" in *-*) PRERELEASE=true ;; esac
+          if [ "$PRERELEASE" = "true" ]; then TAG=next; else TAG=latest; fi
+          if [ "$(npm view faxforagents-fax-time@$PKG version 2>/dev/null)" = "$PKG" ]; then
+            echo "faxforagents-fax-time@$PKG is already on npm, skipping"
+          else
+            npm publish --provenance --access public --tag "$TAG"
+          fi

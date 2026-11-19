@@ -1,0 +1,71 @@
+{
+  "name": "faxforagents-fax-time",
+  "version": "0.1.0",
+  "description": "Fax transmission time from the standards: the ITU-T T.4 Modified Huffman coder of the Fax for Agents fax time tool. It codes each page of a TIFF, PBM or 1-bit bitmap and gives bits and seconds a page at a T.30 modem rate. Page data only, not the whole call.",
+  "keywords": [
+    "fax",
+    "fax-time",
+    "fax-transmission-time",
+    "itu-t-t4",
+    "itu-t-t30",
+    "modified-huffman",
+    "ccitt",
+    "group-3",
+    "tiff",
+    "tiff-fx",
+    "pbm",
+    "fax-for-agents"
+  ],
+  "homepage": "https://faxforagents.com/tools/fax-time/",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/faxforagents/fax-time.git"
+  },
+  "bugs": {
+    "url": "https://github.com/faxforagents/fax-time/issues"
+  },
+  "license": "MIT",
+  "author": "Fax for Agents <hello@faxforagents.com> (https://faxforagents.com)",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./standards.json": "./dist/standards.json",
+    "./package.json": "./package.json"
+  },
+  "bin": {
+    "fax-time": "dist/cli.js"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE",
+    "CHANGELOG.md"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "sideEffects": false,
+  "scripts": {
+    "build": "node scripts/embed-standards.mjs --check && tsc -p tsconfig.build.json && node scripts/embed-standards.mjs --dist",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "lint": "biome check . && node scripts/embed-standards.mjs --check",
+    "test": "node --test test/*.test.mjs",
+    "check": "npm run typecheck && npm run lint && npm run build && npm test",
+    "prepack": "npm run build",
+    "standards": "node scripts/embed-standards.mjs"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "2.6.8",
+    "@types/node": "^20.19.0",
+    "typescript": "^7.0.2"
+  },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  }
+}
