@@ -38,7 +38,7 @@
     "./package.json": "./package.json"
   },
   "bin": {
-    "fax-time": "./dist/cli.js"
+    "fax-time": "dist/cli.js"
   },
   "files": [
     "dist",
@@ -47,16 +47,17 @@
     "CHANGELOG.md"
   ],
   "engines": {
-    "node": ">=20.10"
+    "node": ">=20"
   },
   "sideEffects": false,
   "scripts": {
-    "build": "tsc -p tsconfig.build.json",
+    "build": "node scripts/embed-standards.mjs --check && tsc -p tsconfig.build.json && node scripts/embed-standards.mjs --dist",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "lint": "biome check .",
+    "lint": "biome check . && node scripts/embed-standards.mjs --check",
     "test": "node --test test/*.test.mjs",
     "check": "npm run typecheck && npm run lint && npm run build && npm test",
-    "prepack": "npm run build"
+    "prepack": "npm run build",
+    "standards": "node scripts/embed-standards.mjs"
   },
   "devDependencies": {
     "@biomejs/biome": "2.6.8",

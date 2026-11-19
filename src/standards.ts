@@ -8,7 +8,7 @@
  * table is not the size T.4 gives it or not a prefix code, or when a text is not the edition the data names.
  */
 import { type CodeTables, ituRate } from './mh.js'
-import data from './standards.json' with { type: 'json' }
+import data from './standards-data.js'
 
 const fail = (message: string): never => {
   throw new Error(`faxforagents-fax-time standards: ${message}`)

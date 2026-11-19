@@ -73,8 +73,21 @@ export class TiffReadError extends Error {
   }
 }
 
-/** The size in bytes of one value of each TIFF field type the reader takes: BYTE, SHORT, LONG, RATIONAL. */
-const SIZES: Record<number, number> = { 1: 1, 3: 2, 4: 4, 5: 8 }
+/**
+ * The size in bytes of one value of each TIFF field type the reader takes: BYTE, SHORT, LONG, RATIONAL, and the
+ * signed SBYTE, SSHORT and SLONG, which libtiff also takes for whole-number tags.
+ */
+export const FIELD_SIZES: Record<number, number> = { 1: 1, 3: 2, 4: 4, 5: 8, 6: 1, 8: 2, 9: 4 }
+
+/** One whole-number value of a field of type 1, 3, 4, 6, 8 or 9 at `p`. */
+export function fieldValue(view: DataView, p: number, type: number, little: boolean): number {
+  if (type === 1) return view.getUint8(p)
+  if (type === 3) return view.getUint16(p, little)
+  if (type === 4) return view.getUint32(p, little)
+  if (type === 6) return view.getInt8(p)
+  if (type === 8) return view.getInt16(p, little)
+  return view.getInt32(p, little)
+}
 
 const WANTED = new Set<number>(Object.values(TAGS))
 
@@ -138,7 +151,7 @@ function readIfd(view: DataView, little: boolean, size: number, at: number, coun
   for (const [tag, entry] of first) {
     const type = view.getUint16(entry + 2, little)
     const n = view.getUint32(entry + 4, little)
-    const width = SIZES[type]
+    const width = FIELD_SIZES[type]
     if (!width || n === 0) {
       page.unreadable.push(tag)
       continue
@@ -157,10 +170,8 @@ function readIfd(view: DataView, little: boolean, size: number, at: number, coun
     const rationals: Rational[] = []
     for (let k = 0; k < take; k++) {
       const p = start + k * width
-      if (type === 1) values.push(view.getUint8(p))
-      else if (type === 3) values.push(view.getUint16(p, little))
-      else if (type === 4) values.push(view.getUint32(p, little))
-      else rationals.push({ num: view.getUint32(p, little), den: view.getUint32(p + 4, little) })
+      if (type === 5) rationals.push({ num: view.getUint32(p, little), den: view.getUint32(p + 4, little) })
+      else values.push(fieldValue(view, p, type, little))
     }
     if (tag === TAGS.xResolution || tag === TAGS.yResolution) {
       // TIFF gives a resolution as a RATIONAL. A whole number in a SHORT or LONG is read as that number over 1.

@@ -1,6 +1,6 @@
 /**
- * The PBM reader, for the Netpbm bi-level format: raw PBM (magic "P4"), one or more images in a file, and plain
- * PBM (magic "P1"), one image. In both a 1 is black and a 0 is white, and the pixels are square. A PBM gives no
+ * The PBM reader, for the Netpbm bi-level format: raw PBM (magic "P4") and plain PBM (magic "P1"), one or more
+ * images in a file. In both a 1 is black and a 0 is white, and the pixels are square. A PBM gives no
  * resolution, so a page is taken as the full width of the scan line unless a resolution is passed with it.
  *
  * Every image's size is checked against the bytes the file holds before any memory is taken for it, so a header
@@ -56,10 +56,12 @@ class Cursor {
     this.skip()
     const start = this.pos
     while (this.pos < this.bytes.length && (this.bytes[this.pos] as number) >= 0x30 && (this.bytes[this.pos] as number) <= 0x39) this.pos++
-    const digits = this.pos - start
-    if (digits === 0) throw new PbmReadError('damaged', `the ${what} is not a number`)
-    if (digits > 9) throw new PbmReadError('too-large', `the ${what} has ${digits} digits`)
-    const n = Number(String.fromCharCode(...this.bytes.subarray(start, this.pos)))
+    if (this.pos === start) throw new PbmReadError('damaged', `the ${what} is not a number`)
+    let first = start
+    while (first < this.pos - 1 && this.bytes[first] === 0x30) first++
+    // Leading zeros say nothing. More than nine digits is a billion pixels or more, past any limit.
+    if (this.pos - first > 9) throw new PbmReadError('too-large', `the ${what} has ${this.pos - first} digits`)
+    const n = Number(String.fromCharCode(...this.bytes.subarray(first, this.pos)))
     if (n === 0) throw new PbmReadError('damaged', `the ${what} is 0`)
     return n
   }
@@ -85,16 +87,20 @@ export function readPbm(bytes: Uint8Array, maxPages: number, maxPixels: number):
       const width = c.number('width')
       const height = c.number('height')
       if (width * height > maxPixels) throw new PbmReadError('too-large', `${width} by ${height} pixels`)
+      // A comment may come between the height and the white space that ends the header. It runs to, and not
+      // over, the end of its line, and that line end is the white space.
+      if (bytes[c.pos] === 0x23) while (c.pos < bytes.length && bytes[c.pos] !== 0x0a && bytes[c.pos] !== 0x0d) c.pos++
       // A single white space character ends the header.
       if (!isSpace(bytes[c.pos])) throw new PbmReadError('damaged', 'the header does not end in white space')
       c.pos++
       const pixels = kind === 'P4' ? raw(bytes, c, width, height) : plain(bytes, c, width, height)
       images.push({ width, height, pixels })
-      if (kind === 'P1') return { images, more: false, stopped: null }
-      // Raw images follow each other with nothing between them. White space at the end is no further image.
+      // Images follow each other in one file. White space at the end is no further image, and so is anything a
+      // plain image is followed by that is not another image.
       at = c.pos
       while (isSpace(bytes[at])) at++
       if (at >= bytes.length) return { images, more: false, stopped: null }
+      if (kind === 'P1' && magic(bytes, at) !== 'P1' && magic(bytes, at) !== 'P4') return { images, more: false, stopped: null }
     } catch (err) {
       if (!(err instanceof PbmReadError)) throw err
       return { images, more: false, stopped: { image: images.length + 1, kind: err.kind, detail: err.message } }

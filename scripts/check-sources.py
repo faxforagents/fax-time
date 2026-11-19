@@ -1,6 +1,6 @@
 """Reads the texts again and finds every quote and code word of src/standards.json in them.
 
-    python3 -m venv .venv && .venv/bin/pip install pypdf
+    python3 -m venv .venv && .venv/bin/pip install pypdf==7.1.1
     .venv/bin/python -I scripts/check-sources.py
 
 It fetches the T.4 (07/03) and T.30 (09/05) PDFs from itu.int, RFC 3949 from rfc-editor.org and the page of each

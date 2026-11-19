@@ -3,5 +3,4 @@ dist/
 *.tgz
 .env
 .env.*
-.coding-agent/
-.ci-speedup-gaps/
+.venv/

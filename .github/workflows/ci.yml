@@ -32,16 +32,10 @@ jobs:
       - run: npm ci
       - run: npm run typecheck
       - run: npm run lint
-      - name: The package holds dist, the README, the licence and the changelog, and nothing else
+      - name: The package holds what it should and nothing else
         run: |
           npm pack --dry-run --json > "$RUNNER_TEMP/pack.json"
-          node -e '
-            const [p] = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"))
-            const files = p.files.map((f) => f.path)
-            console.log(files.join("\n"))
-            const extra = files.filter((f) => !/^(dist\/[\w.-]+\.(js|d\.ts|json)|README\.md|LICENSE|CHANGELOG\.md|package\.json)$/.test(f))
-            if (extra.length) { console.error("not meant to ship:", extra); process.exit(1) }
-          ' "$RUNNER_TEMP/pack.json"
+          node scripts/check-pack.mjs "$RUNNER_TEMP/pack.json"
 
   test:
     name: build and test on node ${{ matrix.node }}
@@ -50,7 +44,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        node: ["20", "22", "24"]
+        # 20.0.0 is the oldest Node that package.json allows, the others the newest of each line.
+        node: ["20.0.0", "20", "22", "24"]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0

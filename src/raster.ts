@@ -35,7 +35,7 @@ export function place(
   tolerance: number,
   own?: { width: number; height: number },
 ): Placement {
-  if (!(widthMm > 0) || !(heightMm > 0)) throw new RangeError('a page with no size')
+  if (!(Number.isFinite(widthMm) && widthMm > 0 && Number.isFinite(heightMm) && heightMm > 0)) throw new RangeError('a page with no size')
   const k = Math.min(1, line.mm / widthMm)
   let cols = Math.min(line.pels, Math.max(1, Math.round((widthMm * k * line.pels) / line.mm)))
   let lines = Math.max(1, Math.round(heightMm * k * linesPerMm))
@@ -46,36 +46,71 @@ export function place(
   return { cols, left: Math.floor((line.pels - cols) / 2), lines }
 }
 
+/** Darker than mid-grey is black. A pel at mid-grey exactly is white: the margin keeps rounding in the sums from deciding a tie. */
+const BLACK_BELOW = 127.5 - 1e-6
+
 /**
  * The pels of a page: `grey` holds `width` by `height` source pixels, one byte each, 0 black to 255 white. The
  * result holds `p.lines` rows of `line.pels` bytes, 1 for black. Each pel averages the source pixels it covers,
- * by area. Memory is the result and two rows of `p.cols` sums: nothing the size of the source is allocated, and
- * each source row is drawn down to the pels once, however many scan lines it falls in.
+ * by area. The work is in proportion to the source pixels plus the pels, never their product.
  */
 export function toPels(grey: Uint8Array | Uint8ClampedArray, width: number, height: number, p: Placement, line: Line): Uint8Array {
   if (grey.length < width * height) throw new RangeError('fewer pixels than the page size')
   const out = new Uint8Array(p.lines * line.pels)
+  if (p.cols === width && p.lines === height) {
+    // Pixel for pixel: each pel is the one pixel it covers.
+    for (let y = 0; y < height; y++) {
+      const at = y * line.pels + p.left
+      const base = y * width
+      for (let x = 0; x < width; x++) if ((grey[base + x] as number) < BLACK_BELOW) out[at + x] = 1
+    }
+    return out
+  }
   const sx = width / p.cols
   const sy = height / p.lines
-  // One source row as the average over each pel's columns, kept for the next scan line that needs it.
-  const cache = new Map<number, Float64Array>()
-  const across = (j: number): Float64Array => {
-    const hit = cache.get(j)
-    if (hit) return hit
-    const row = new Float64Array(p.cols)
-    const base = j * width
+  /** One row at source width drawn across to the pels: each pel the average over its columns. */
+  const across = (src: ArrayLike<number>, base: number, into: Float64Array): Float64Array => {
     for (let x = 0; x < p.cols; x++) {
       const a = x * sx
       const b = (x + 1) * sx
       let v = 0
-      for (let i = Math.floor(a); i < Math.min(width, Math.ceil(b)); i++) v += (grey[base + i] as number) * (Math.min(b, i + 1) - Math.max(a, i))
-      row[x] = v / sx
+      for (let i = Math.floor(a); i < Math.min(width, Math.ceil(b)); i++) v += (src[base + i] as number) * (Math.min(b, i + 1) - Math.max(a, i))
+      into[x] = v / sx
     }
-    if (cache.size >= 2) cache.delete(cache.keys().next().value as number)
-    cache.set(j, row)
-    return row
+    return into
   }
   const acc = new Float64Array(p.cols)
+  if (sy >= 1) {
+    // Down from one source row or more a scan line: the rows of each line are added up at source width first,
+    // then drawn across once. Each source row is added into at most two lines.
+    const sum = new Float64Array(width)
+    for (let y = 0; y < p.lines; y++) {
+      sum.fill(0)
+      const a = y * sy
+      const b = (y + 1) * sy
+      for (let j = Math.floor(a); j < Math.min(height, Math.ceil(b)); j++) {
+        const wy = (Math.min(b, j + 1) - Math.max(a, j)) / sy
+        if (!(wy > 0)) continue
+        const base = j * width
+        for (let i = 0; i < width; i++) sum[i] = (sum[i] as number) + (grey[base + i] as number) * wy
+      }
+      across(sum, 0, acc)
+      const at = y * line.pels + p.left
+      for (let x = 0; x < p.cols; x++) if ((acc[x] as number) < BLACK_BELOW) out[at + x] = 1
+    }
+    return out
+  }
+  // Up to more scan lines than source rows: each source row is drawn across once and kept for the next scan line
+  // that needs it. Memory is the result and a few rows of p.cols sums.
+  const cache = new Map<number, Float64Array>()
+  const row = (j: number): Float64Array => {
+    const hit = cache.get(j)
+    if (hit) return hit
+    const r = across(grey, j * width, new Float64Array(p.cols))
+    if (cache.size >= 2) cache.delete(cache.keys().next().value as number)
+    cache.set(j, r)
+    return r
+  }
   for (let y = 0; y < p.lines; y++) {
     acc.fill(0)
     const a = y * sy
@@ -83,13 +118,11 @@ export function toPels(grey: Uint8Array | Uint8ClampedArray, width: number, heig
     for (let j = Math.floor(a); j < Math.min(height, Math.ceil(b)); j++) {
       const wy = (Math.min(b, j + 1) - Math.max(a, j)) / sy
       if (!(wy > 0)) continue
-      const row = across(j)
-      for (let x = 0; x < p.cols; x++) acc[x] = (acc[x] as number) + (row[x] as number) * wy
+      const r = row(j)
+      for (let x = 0; x < p.cols; x++) acc[x] = (acc[x] as number) + (r[x] as number) * wy
     }
     const at = y * line.pels + p.left
-    // Darker than mid-grey is black. A pel at mid-grey exactly is white: the margin keeps rounding in the sums
-    // from deciding a tie.
-    for (let x = 0; x < p.cols; x++) if ((acc[x] as number) < 127.5 - 1e-6) out[at + x] = 1
+    for (let x = 0; x < p.cols; x++) if ((acc[x] as number) < BLACK_BELOW) out[at + x] = 1
   }
   return out
 }

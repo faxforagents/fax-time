@@ -48,14 +48,14 @@ test('the rate, the scan line time and the resolution can be picked, and JSON pr
   assert.deepEqual([v34.settings.ms, v34.pages[0].fill], [0, 0])
 })
 
-test('a PBM takes --dpi, and says when it has to assume square pixels', () => {
+test('a PBM takes --dpi, and says when it has to take the page as the width of the line', () => {
   const pixels = new Uint8Array(1728 * 1100)
   pixels.fill(1, 1728 * 200, 1728 * 400)
   const file = join(dir, 'page.pbm')
   writeFileSync(file, pbm(1728, 1100, pixels))
   const plain = run(file)
   assert.equal(plain.status, 0, plain.stderr)
-  assert.match(plain.stderr, /no resolution/)
+  assert.match(plain.stderr, /no size on paper/)
   assert.match(plain.stdout, /^page 1: .* 527 lines$/m)
   const given = run('--dpi', '204x98', file)
   assert.equal(given.stderr, '')
@@ -86,4 +86,47 @@ test('--version prints the version of package.json, and --help the usage', () =>
   assert.equal(help.status, 0)
   assert.match(help.stdout, /^Usage: fax-time \[options\] <file>/)
   assert.match(help.stdout, /page data only/)
+})
+
+test('a page that is not read, a page limit reached or a damaged page chain exit 1, and say why', () => {
+  const limited = run('--max-pages', '2', join(FIXTURES, 'g4-3-pages.tif'))
+  assert.deepEqual([limited.status, /only the first 2 were read/.test(limited.stderr)], [1, true])
+  assert.match(limited.stdout, /^total: 44\.0 s for 2 pages/m)
+  const bytes = readFileSync(join(FIXTURES, 'g4-3-pages.tif'))
+  // Point the second page's strip past the end of the file.
+  const cut = Buffer.from(bytes)
+  const ifds = []
+  for (let at = cut.readUInt32LE(4); at; at = cut.readUInt32LE(at + 2 + cut.readUInt16LE(at) * 12)) ifds.push(at)
+  for (let k = 0; k < cut.readUInt16LE(ifds[1]); k++) {
+    const e = ifds[1] + 2 + k * 12
+    if (cut.readUInt16LE(e) === 273) cut.writeUInt32LE(cut.length + 10, e + 8)
+  }
+  const broken = join(dir, 'broken.tif')
+  writeFileSync(broken, cut)
+  const b = run(broken)
+  assert.deepEqual([b.status, /page 2 could not be read/.test(b.stderr)], [1, true])
+  assert.match(b.stdout, /^page 1: /m)
+  // The last page's next-IFD offset pointing back at the first page.
+  const looped = Buffer.from(bytes)
+  looped.writeUInt32LE(ifds[0], ifds[2] + 2 + looped.readUInt16LE(ifds[2]) * 12)
+  const loopFile = join(dir, 'loop.tif')
+  writeFileSync(loopFile, looped)
+  const l = run(loopFile)
+  assert.deepEqual([l.status, /chain of pages ends early \(loop\)/.test(l.stderr)], [1, true])
+})
+
+test('--dpi 0, a clash of --fine and --resolution, and --max-pages 0 exit 2 with no stack trace', () => {
+  for (const args of [
+    ['--dpi', '0'],
+    ['--dpi', '0x98'],
+    ['--fine', '--resolution', 'standard'],
+    ['--max-pages', '0'],
+    ['--resolution', 'superfine'],
+  ]) {
+    const r = run(...args, join(FIXTURES, 'g4-fine.tif'))
+    assert.equal(r.status, 2, args.join(' '))
+    assert.ok(!/\n\s+at /.test(r.stderr), `a stack trace for ${args.join(' ')}`)
+  }
+  assert.match(run('--resolution', 'fine', join(FIXTURES, 'g4-fine.tif')).stdout, /2200 lines/)
+  assert.equal(run('-h').status, 0)
 })

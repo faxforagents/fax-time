@@ -66,3 +66,31 @@ test('a fax page as a PBM at 204 by 98 gives the numbers of the same page as a T
   const square = await faxTime(file)
   assert.deepEqual([square.pages[0].assumed, square.pages[0].lines], [true, 527])
 })
+
+test('a comment may end the header, CRLF line ends work, and leading zeros say nothing', () => {
+  for (const header of ['P4\n8 1#made by hand\n', 'P4\r\n8 1\r\n'.slice(0, -1), 'P4 # a\n # b\n8 1#c\r']) {
+    const r = readPbm(concat(text(header), new Uint8Array([0xf0])), 10, 1000)
+    assert.deepEqual([r.stopped, [...r.images[0].pixels]], [null, [1, 1, 1, 1, 0, 0, 0, 0]], JSON.stringify(header))
+  }
+  const plainComment = readPbm(text('P1\n2 1#c\n1 0'), 10, 1000)
+  assert.deepEqual([...plainComment.images[0].pixels], [1, 0])
+  const zeros = readPbm(concat(text('P4\n0000000008 1\n'), new Uint8Array([0xff])), 10, 1000)
+  assert.deepEqual([zeros.stopped, zeros.images[0].width], [null, 8])
+})
+
+test('raw and plain images can follow each other, and junk after the last raw one is named', () => {
+  const raw = pbm(8, 1, [1, 0, 1, 0, 1, 0, 1, 0])
+  const mixed = concat(raw, text('P1\n2 1\n0 1\n'), raw)
+  assert.deepEqual(
+    readPbm(mixed, 10, 1000).images.map((i) => [...i.pixels]),
+    [
+      [1, 0, 1, 0, 1, 0, 1, 0],
+      [0, 1],
+      [1, 0, 1, 0, 1, 0, 1, 0],
+    ],
+  )
+  // Anything after a plain image that is not another image is the junk the format allows there.
+  assert.equal(readPbm(text('P1 1 1 1 and then some words'), 10, 1000).stopped, null)
+  const junk = readPbm(concat(raw, text('junk')), 10, 1000)
+  assert.deepEqual([junk.images.length, junk.stopped?.kind], [1, 'not-pbm'])
+})

@@ -8,8 +8,9 @@
  * tiles, JPEG, palette images, other bit depths. A strip that points outside the file, a page over the pixel
  * limit and a strip that breaks off are refused for that page. Nothing here makes a request or keeps anything.
  */
+import { constants, inflateSync } from 'node:zlib'
 import { CcittError, type Decoder, decodeStrip, type Scheme } from './ccitt.js'
-import { readTiff, type TiffPage, type TiffResult } from './tiff-read.js'
+import { FIELD_SIZES, fieldValue, readTiff, TAGS, type TiffPage, type TiffResult } from './tiff-read.js'
 
 export type Unreadable = 'tiles' | 'compression' | 'depth' | 'photometric' | 'strips' | 'damaged' | 'too-large' | 'no-size'
 
@@ -32,6 +33,11 @@ export interface GreyPage {
   mm: { width: number; height: number } | null
   /** Its resolution across and down, per inch, when the file gives it in inches. Null otherwise. */
   dpi: { x: number; y: number } | null
+  /**
+   * The height of a pixel over its width, when the file gives a resolution across and down but no unit to
+   * measure it in (ResolutionUnit 1). Null otherwise.
+   */
+  aspect: number | null
 }
 
 const TAG = {
@@ -46,12 +52,12 @@ const TAG = {
   orientation: 274,
 } as const
 
-/** The values of one tag of an IFD, read with the same bounds checks as ./tiff-read.ts. */
+/** The values of the tags of an IFD this module reads, with the same bounds checks as ./tiff-read.ts. */
 interface Raw {
   values: Map<number, number[]>
+  /** Tags the IFD names whose values could not be read: the wrong type, out of the file or too many. */
+  unreadable: Set<number>
 }
-
-const SIZES: Record<number, number> = { 1: 1, 3: 2, 4: 4 }
 
 function ifdOffsets(view: DataView, little: boolean, count: number): number[] {
   const out: number[] = []
@@ -66,6 +72,7 @@ function ifdOffsets(view: DataView, little: boolean, count: number): number[] {
 
 function rawTags(view: DataView, little: boolean, at: number, maxValues: number): Raw {
   const values = new Map<number, number[]>()
+  const unreadable = new Set<number>()
   const wanted = new Set<number>(Object.values(TAG))
   const n = view.getUint16(at, little)
   for (let i = 0; i < n; i++) {
@@ -75,31 +82,49 @@ function rawTags(view: DataView, little: boolean, at: number, maxValues: number)
     if (!wanted.has(tag) || values.has(tag)) continue
     const type = view.getUint16(e + 2, little)
     const count = view.getUint32(e + 4, little)
-    const size = SIZES[type]
-    if (!size || count === 0 || count > maxValues) {
+    // Every tag read here is a whole number, so a RATIONAL is not one of its types.
+    const size = type === 5 ? undefined : FIELD_SIZES[type]
+    const start = size ? (size * count <= 4 ? e + 8 : view.getUint32(e + 8, little)) : 0
+    if (!size || count === 0 || count > maxValues || start + size * count > view.byteLength) {
       values.set(tag, [])
-      continue
-    }
-    const start = size * count <= 4 ? e + 8 : view.getUint32(e + 8, little)
-    if (start + size * count > view.byteLength) {
-      values.set(tag, [])
+      unreadable.add(tag)
       continue
     }
     const list: number[] = []
-    for (let k = 0; k < count; k++) {
-      const p = start + k * size
-      list.push(size === 1 ? view.getUint8(p) : size === 2 ? view.getUint16(p, little) : view.getUint32(p, little))
-    }
+    for (let k = 0; k < count; k++) list.push(fieldValue(view, start + k * size, type, little))
     values.set(tag, list)
   }
-  return { values }
+  return { values, unreadable }
 }
+
+/**
+ * The tags that change the pixels of a page. When one of them is named but cannot be read, a default would give
+ * other pixels than the file holds, so the page is refused instead.
+ */
+const PIXEL_TAGS: number[] = [
+  TAGS.imageWidth,
+  TAGS.imageLength,
+  TAGS.bitsPerSample,
+  TAGS.compression,
+  TAGS.photometric,
+  TAGS.fillOrder,
+  TAGS.t4Options,
+  TAG.samplesPerPixel,
+  TAG.rowsPerStrip,
+  TAG.stripOffsets,
+  TAG.stripByteCounts,
+  TAG.planar,
+  TAG.predictor,
+  TAG.extraSamples,
+  TAG.orientation,
+]
 
 /** Millimetres per unit of a TIFF resolution: inch (2, the default) or centimetre (3). Null for no unit. */
 const unitMm = (unit: number | undefined): number | null => (unit === undefined || unit === 2 ? 25.4 : unit === 3 ? 10 : null)
 
 /** The page's size on paper from its tags, or null when a resolution is missing, zero or in no unit. */
 export function paperMm(page: TiffPage): { width: number; height: number } | null {
+  if (page.unreadable.includes(TAGS.resolutionUnit)) return null
   const mm = unitMm(page.resolutionUnit)
   const x = page.xResolution
   const y = page.yResolution
@@ -211,8 +236,23 @@ function lzw(data: Uint8Array, expected: number): Uint8Array {
   return out
 }
 
-/** A Deflate strip, inflated only as far as its rows need: a strip that would inflate past them is cut there. */
+/**
+ * A Deflate strip, inflated only as far as its rows need: a strip that would inflate past them is cut there.
+ * zlib refuses to write more than the rows, and only such a strip is read again as a stream, up to its rows.
+ */
 async function inflate(data: Uint8Array, expected: number): Promise<Uint8Array> {
+  let out: Uint8Array
+  try {
+    out = inflateSync(data, { maxOutputLength: expected, finishFlush: constants.Z_SYNC_FLUSH })
+  } catch (err) {
+    if ((err as { code?: string }).code === 'ERR_BUFFER_TOO_LARGE') return inflateStream(data, expected)
+    throw new PageError('damaged', 'a Deflate strip could not be read')
+  }
+  if (out.length < expected) throw new PageError('damaged', 'a Deflate strip ends early')
+  return out
+}
+
+async function inflateStream(data: Uint8Array, expected: number): Promise<Uint8Array> {
   const out = new Uint8Array(expected)
   let o = 0
   const reader = new Blob([data as Uint8Array<ArrayBuffer>]).stream().pipeThrough(new DecompressionStream('deflate')).getReader()
@@ -276,24 +316,36 @@ export function orient(page: GreyPage, orientation: number): GreyPage {
   for (let y = 0; y < oh; y++) for (let x = 0; x < ow; x++) out[y * ow + x] = grey[at(x, y)] as number
   const mm = page.mm && swap ? { width: page.mm.height, height: page.mm.width } : page.mm
   const dpi = page.dpi && swap ? { x: page.dpi.y, y: page.dpi.x } : page.dpi
-  return { width: ow, height: oh, grey: out, mm, dpi }
+  const aspect = page.aspect !== null && swap ? 1 / page.aspect : page.aspect
+  return { width: ow, height: oh, grey: out, mm, dpi, aspect }
 }
 
 export interface PageOptions {
   /** The most pixels one page may have. */
   maxPixels: number
   decoder: Decoder
+  /**
+   * The strip bytes the file has left to give, shared by its pages. Strips that do not overlap add up to no more
+   * than the file, so a page whose strips add up to more is refused: the work of reading strips stays in
+   * proportion to the size of the file.
+   */
+  budget?: { bytes: number }
 }
+
+/** The longest strip read in fax coding or LZW, which count bits in 32-bit numbers: 256 MiB. */
+const MAX_BIT_STRIP = 2 ** 28
 
 /** The grey pixels of one page of a TIFF. */
 export async function decodePage(bytes: Uint8Array, page: TiffPage, ifd: number, little: boolean, opts: PageOptions): Promise<GreyPage> {
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength)
   const width = page.width
   const height = page.length
-  if (!width || !height) throw new PageError('no-size')
+  if (!width || !height || !Number.isInteger(width) || !Number.isInteger(height) || width < 1 || height < 1) throw new PageError('no-size')
   if (width * height > opts.maxPixels) throw new PageError('too-large')
   // A strip holds at least one row, so no strip list is longer than the page is high.
   const raw = rawTags(view, little, ifd, height)
+  const lost = PIXEL_TAGS.find((t) => page.unreadable.includes(t) || raw.unreadable.has(t))
+  if (lost !== undefined) throw new PageError(lost === TAG.stripOffsets || lost === TAG.stripByteCounts ? 'strips' : 'damaged', `tag ${lost} cannot be read`)
   const one = (tag: number, dflt: number): number => raw.values.get(tag)?.[0] ?? dflt
   if (raw.values.has(TAG.tileWidth)) throw new PageError('tiles')
   const compression = page.compression ?? 1
@@ -330,7 +382,14 @@ export async function decodePage(bytes: Uint8Array, page: TiffPage, ifd: number,
   for (let s = 0; s < count; s++) {
     const off = offsets[s] as number
     const len = counts[s] as number
-    if (off + len > bytes.length) throw new PageError('strips')
+    if (off < 0 || len < 0 || off + len > bytes.length) throw new PageError('strips')
+    // A strip of no bytes holds no rows, and many of them would cost a decoder each for nothing.
+    if (len === 0) throw new PageError('damaged', 'a strip holds no bytes')
+    if (opts.budget) {
+      opts.budget.bytes -= len
+      if (opts.budget.bytes < 0) throw new PageError('strips', 'the strips add up to more bytes than the file holds')
+    }
+    if (len > MAX_BIT_STRIP && (fax || compression === 5)) throw new PageError('too-large', 'a strip of more than 256 MiB')
     const data = bytes.subarray(off, off + len)
     const y0 = s * rowsPerStrip
     const rows = Math.min(rowsPerStrip, height - y0)
@@ -383,8 +442,13 @@ export async function decodePage(bytes: Uint8Array, page: TiffPage, ifd: number,
     for (let i = 0; i < pels.length; i++) grey[i] = pels[i] === blackIs ? 0 : 255
   }
   const { xResolution: xr, yResolution: yr } = page
-  const dpi = (page.resolutionUnit ?? 2) === 2 && xr && yr && xr.den && yr.den ? { x: xr.num / xr.den, y: yr.num / yr.den } : null
-  return orient({ width, height, grey, mm: paperMm(page), dpi }, one(TAG.orientation, 1))
+  const unit = page.unreadable.includes(TAGS.resolutionUnit) ? null : (page.resolutionUnit ?? 2)
+  const both = xr && yr && xr.num && yr.num && xr.den && yr.den ? { x: xr.num / xr.den, y: yr.num / yr.den } : null
+  const dpi = unit === 2 ? both : null
+  // TIFF 6.0, ResolutionUnit: "1 = No absolute unit of measurement. Used for images that may have a non-square
+  // aspect ratio, but no meaningful absolute dimensions."
+  const aspect = unit === 1 && both ? both.x / both.y : null
+  return orient({ width, height, grey, mm: paperMm(page), dpi, aspect }, one(TAG.orientation, 1))
 }
 
 export interface TiffFile {

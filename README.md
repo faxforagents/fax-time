@@ -15,7 +15,7 @@ How long the page data of a fax takes on the line, worked out from ITU-T T.4 and
 [![npm version](https://img.shields.io/npm/v/faxforagents-fax-time?label=npm)](https://www.npmjs.com/package/faxforagents-fax-time)
 [![CI](https://img.shields.io/github/actions/workflow/status/faxforagents/fax-time/ci.yml?branch=main&label=ci)](https://github.com/faxforagents/fax-time/actions/workflows/ci.yml)
 [![MIT licence](https://img.shields.io/badge/licence-MIT-1f6feb)](https://github.com/faxforagents/fax-time/blob/main/LICENSE)
-[![Node 20.10+](https://img.shields.io/badge/node-20.10%2B-339933)](https://nodejs.org)
+[![Node 20+](https://img.shields.io/badge/node-20%2B-339933)](https://nodejs.org)
 [![ITU-T T.4 (07/03)](https://img.shields.io/badge/ITU--T-T.4%20(07%2F03)-0a6ebd)](https://www.itu.int/rec/T-REC-T.4-200307-I/en)
 
 `faxforagents-fax-time` lays each page on the T.4 scan line and makes it black and white. It codes every
@@ -26,7 +26,7 @@ are the seconds.
 The figure is the page data alone. The call set-up, the modem training, the confirmation after each page,
 retries and a busy line all add time. This covers the page data only, not the call around it.
 
-It reads TIFF, including fax-coded TIFF, and PBM. It runs in Node 20.10 and later, has no dependencies and makes
+It reads TIFF, including fax-coded TIFF, and PBM. It runs in Node 20 and later, has no dependencies and makes
 no network request.
 
 ## Install
@@ -60,12 +60,15 @@ This covers the page data only, not the call around it.
 | `-r`, `--rate <bit/s>` | The modem rate: 2400, 4800, 7200, 9600, 12000, 14400 (the default) or 33600 |
 | `-t`, `--scan-time <ms>` | The minimum scan line time: 0, 5, 10, 20 (the default) or 40 |
 | `-f`, `--fine` | Fine resolution, 7.7 lines/mm, in place of standard, 3.85 lines/mm |
+| `--resolution <name>` | `standard` (the default) or `fine` |
 | `--dpi <x>[x<y>]` | The resolution of a page that gives none, such as every PBM page |
+| `--max-pages <n>` | The most pages read from the file, 1000 by default |
 | `--json` | The whole result as JSON |
+| `-h`, `--help` and `-v`, `--version` | The usage and the version |
 
 At 33600 bit/s the time is 0 ms and no other, because T.30 makes error correction mandatory with V.34. The
-command exits 0 when it read every page. It exits 1 when the file or a page could not be read, and 2 for a
-wrong argument.
+command exits 0 when it read every page and 2 for a wrong argument. It exits 1 when the file or one of its pages
+could not be read, and when the file has more pages than `--max-pages`.
 
 ## The library
 
@@ -115,14 +118,16 @@ So a blank US Letter page is 1071 such lines and 72 bits of EOLs around them, 21
 A page is laid on the 215 mm line at its own size and centred. A page wider than the line is scaled down to fit
 it. Each pel is the average of the pixels it covers, and a pel darker than mid-grey is black. A fax page 1728
 pels wide at 200 or 204 per inch is coded row for row. RFC 3949 profile S treats its rows as standard lines
-at 98 or 100 lines per inch, and as fine lines at 196 or 200. A page with no resolution is taken as the full
-width of the line, with square pixels, and the result says so.
+at 98 or 100 lines per inch, and as fine lines at 196 or 200. A page with no size on paper is taken as the
+full width of the line, and the result says so. Its pixels are square, unless it gives a resolution in no unit,
+which TIFF allows for the shape of its pixels.
 
 ## Where each figure comes from
 
 No figure is typed into the code. `src/standards.ts` reads each one out of a quote in
 [`src/standards.json`](src/standards.json), and the module will not load when a quote no longer says it. The
-same file ships in the package as `faxforagents-fax-time/standards.json`, with the clause of every quote.
+build writes that file into a module, so no Node version has to import JSON. It also ships in the package as
+`faxforagents-fax-time/standards.json`, with the clause of every quote.
 
 | Figure | Read from | Text |
 |---|---|---|
@@ -145,15 +150,19 @@ Tables 2 and 3a were found in them again on 2026-11-19 by `scripts/check-sources
 
 - TIFF: black and white pages, and 8-bit grey or RGB pages, in strips. They can be uncompressed, PackBits, LZW,
   Deflate or fax coded. Fax coding is TIFF compression 2, 3 and 4, in one or two dimensions and in either fill
-  order. A page is turned the way its Orientation tag says. Tiles, JPEG, palette images and other bit depths are named and
-  not read.
-- PBM: raw PBM (P4), one or more images to a file, and plain PBM (P1).
+  order. A page is turned the way its Orientation tag says. Tiles, JPEG, palette images and other bit depths are
+  named and not read. So is a page whose tags that shape its pixels cannot be read.
+- PBM: raw PBM (P4) and plain PBM (P1), one or more images to a file.
 - PDF is not read in version 0.1. Drawing a PDF page in Node needs a canvas, so render it to a TIFF or PBM first.
 
-A hostile file asks for little. Every offset is checked before it is read, and a page chain that loops ends.
-A strip is decoded only as far as its rows need. A page over the pixel limit is refused, and so is a page whose
-scan lines would hold more pels than it. The limits are 1000 pages and 2^26 pixels a page, and `limits`
-changes them. They guard memory and come from no standard.
+A damaged file gives a named error. Every offset is checked before it is read, and a page chain that loops
+ends. A strip is decoded only as far as its rows need. The strips of a file may add up to no more bytes than the
+file holds. A page over the pixel limit is refused, and so is a page whose scan lines
+would hold more pels than it.
+
+The limits are 1000 pages, 2^26 pixels a page and 2^30 pixels a file, and `limits` changes them. They come from
+no standard. A page can take about six bytes of memory a pixel while it is read, so the default allows about
+400 MB. The time grows with the pixels and the pages, so lower the limits for files you do not trust.
 
 ## What it leaves out
 

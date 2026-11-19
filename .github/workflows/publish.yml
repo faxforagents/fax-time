@@ -1,6 +1,7 @@
 name: publish
 
-# Publishes faxforagents-fax-time to npm with provenance when a GitHub Release is published.
+# Publishes faxforagents-fax-time to npm with provenance when a GitHub Release is published. A manual run must be
+# started on a release tag (v0.1.0 and so on), and both kinds of run check that the tag is the version.
 # Actions pinned by SHA, the same pins as faxforagents/mcp.
 #
 # npm Trusted Publishing (OIDC): no NPM_TOKEN is needed once it is set up. It is configured on npm at Package,
@@ -30,14 +31,23 @@ jobs:
         with:
           node-version: "22"
           registry-url: "https://registry.npmjs.org"
+      - name: Only a release tag is published
+        run: |
+          case "$GITHUB_REF" in
+            refs/tags/v*) echo "publishing $GITHUB_REF_NAME" ;;
+            *) echo "::error::run this on a release tag such as v0.1.0, not $GITHUB_REF"; exit 1 ;;
+          esac
       - run: npm ci
       - run: npm run typecheck
       - run: npm run lint
       - run: npm run build
       - run: npm test
+      - name: The package holds what it should and nothing else
+        run: |
+          npm pack --dry-run --json > "$RUNNER_TEMP/pack.json"
+          node scripts/check-pack.mjs "$RUNNER_TEMP/pack.json"
 
       - name: Assert the tag matches package.json and src/version.ts
-        if: github.event_name == 'release'
         run: |
           TAG="${GITHUB_REF_NAME#v}"
           PKG="$(node -p "require('./package.json').version")"
@@ -48,8 +58,8 @@ jobs:
           fi
           echo "tag and versions agree: $PKG"
 
-      # npm >= 11.5.1 is required for OIDC trusted publishing.
-      - run: npm install -g npm@latest
+      # npm 11.5.1 or later is required for OIDC trusted publishing. 11 runs on the Node 22 of this job.
+      - run: npm install -g npm@11
 
       # The step publishes with the NPM_TOKEN secret when one is set, such as the granular token of the first
       # publish, and with the OIDC exchange when none is. Provenance comes from the id-token permission either

@@ -63,6 +63,7 @@ export function runCode(run: number, colour: Colour, t: CodeTables): string {
 /** The bits of one run: the same choice of code words as runCode, counted. */
 export function runBits(run: number, colour: Colour, l: CodeLengths): number {
   const codes = colour === 0 ? l.white : l.black
+  if (!Number.isInteger(run) || run < 0) throw new RangeError(`a run of ${run} pels`)
   if (run < codes.terminating.length) return codes.terminating[run] as number
   const step = codes.terminating.length
   const index = Math.floor(run / step) - 1
@@ -71,11 +72,19 @@ export function runBits(run: number, colour: Colour, l: CodeLengths): number {
   return makeUp + (codes.terminating[run - (index + 1) * step] as number)
 }
 
+/** A line is `width` pels of `row` from `start`, all of them in the row. */
+function checkRow(row: ArrayLike<number>, width: number, start: number): void {
+  if (!Number.isInteger(width) || width < 1 || !Number.isInteger(start) || start < 0 || start + width > row.length) {
+    throw new RangeError(`a line of ${width} pels from ${start} in a row of ${row.length}`)
+  }
+}
+
 /**
  * The run lengths of a line, white first: a line that starts black begins with a white run of 0. `row` holds one
  * byte per pel, 1 for black, from `start` for `width` pels.
  */
 export function runs(row: ArrayLike<number>, width: number, start = 0): number[] {
+  checkRow(row, width, start)
   const out: number[] = []
   let colour = 0
   let length = 0
@@ -101,6 +110,7 @@ export function encodeLine(row: ArrayLike<number>, width: number, t: CodeTables,
 
 /** The bits of encodeLine, counted without building the string. */
 export function lineBits(row: ArrayLike<number>, width: number, l: CodeLengths, start = 0): number {
+  checkRow(row, width, start)
   let bits = 0
   let colour: Colour = 0
   let length = 0

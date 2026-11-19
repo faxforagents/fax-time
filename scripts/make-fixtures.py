@@ -1,6 +1,6 @@
 """Writes the TIFF fixtures of test/ and test/fixtures/expected.json, with Pillow and its libtiff.
 
-    python3 -m venv .venv && .venv/bin/pip install pillow
+    python3 -m venv .venv && .venv/bin/pip install pillow==13.0.0
     .venv/bin/python scripts/make-fixtures.py
 
 The fixtures are committed, so the tests never need Python. Run this only to make them again.
