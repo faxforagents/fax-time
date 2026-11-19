@@ -23,6 +23,8 @@ export interface Placement {
   lines: number
 }
 
+const snap = (x: number): number => Math.round(x * 1e9) / 1e9
+
 /**
  * Where a page of `widthMm` by `heightMm` sits on the line at `linesPerMm`. `own` is the page's own pixel width
  * and height when it has pixels of its own (a TIFF): within `tolerance` of the worked-out size, they are kept.
@@ -37,18 +39,25 @@ export function place(
 ): Placement {
   if (!(Number.isFinite(widthMm) && widthMm > 0 && Number.isFinite(heightMm) && heightMm > 0)) throw new RangeError('a page with no size')
   const k = Math.min(1, line.mm / widthMm)
-  let cols = Math.min(line.pels, Math.max(1, Math.round((widthMm * k * line.pels) / line.mm)))
-  let lines = Math.max(1, Math.round(heightMm * k * linesPerMm))
-  // Only whole pixels are kept: a page has a whole number of pels and lines.
+  // The pels and lines the page covers, before rounding. Products of decimal figures such as 2005 / 7.7 * 3.85
+  // can land a hair under a half, so they are taken to nine decimal places first.
+  const exactCols = snap((widthMm * k * line.pels) / line.mm)
+  const exactLines = snap(heightMm * k * linesPerMm)
+  let cols = Math.min(line.pels, Math.max(1, Math.round(exactCols)))
+  let lines = Math.max(1, Math.round(exactLines))
+  // A page's own pixels are kept when they are within the tolerance of the size worked out, and whole.
   if (own && Number.isInteger(own.width) && Number.isInteger(own.height) && own.width > 0 && own.height > 0) {
-    if (own.width <= line.pels && Math.abs(own.width - cols) <= tolerance * cols) cols = own.width
-    if (Math.abs(own.height - lines) <= tolerance * lines) lines = own.height
+    if (own.width <= line.pels && Math.abs(own.width - exactCols) <= tolerance * exactCols) cols = own.width
+    if (Math.abs(own.height - exactLines) <= tolerance * exactLines) lines = own.height
   }
   return { cols, left: Math.floor((line.pels - cols) / 2), lines }
 }
 
-/** Darker than mid-grey is black. A pel at mid-grey exactly is white: the margin keeps rounding in the sums from deciding a tie. */
-const BLACK_BELOW = 127.5 - 1e-6
+/**
+ * Darker than mid-grey is black. A pel at mid-grey exactly is white: the margin keeps rounding in the sums from
+ * deciding a tie, and it is far wider than that rounding, which is about 1e-12 here.
+ */
+const BLACK_BELOW = 127.5 - 1e-9
 
 /**
  * The pels of a page: `grey` holds `width` by `height` source pixels, one byte each, 0 black to 255 white. The

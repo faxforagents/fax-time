@@ -432,7 +432,10 @@ export async function decodePage(bytes: Uint8Array, page: TiffPage, ifd: number,
         // Over white paper: alpha multiplied in already adds the white the pixel lets through, alpha that is not
         // mixes the two. An extra sample with no stated meaning is not alpha.
         const alpha = extra === 1 || extra === 2 ? (line[p + base] as number) / 255 : 1
-        grey[y * width + x] = Math.min(255, Math.round(extra === 1 ? v + 255 * (1 - alpha) : v * alpha + 255 * (1 - alpha)))
+        // With WhiteIsZero the samples count ink, and white paper adds none: premultiplied ink is the ink of the
+        // pixel over white already.
+        const over = extra === 1 ? (photometric === 0 ? v : v + 255 * (1 - alpha)) : v * alpha + 255 * (1 - alpha)
+        grey[y * width + x] = Math.min(255, Math.round(over))
       }
     }
   }

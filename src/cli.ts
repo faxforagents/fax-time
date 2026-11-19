@@ -155,7 +155,7 @@ async function main(argv: string[]): Promise<number> {
     err(
       `${assumed.length === t.pages.length ? 'the file gives' : `${pages(assumed.length)} give`} no size on paper, so ${assumed.length === 1 ? 'the page was' : 'they were'} taken as the full width of the scan line. Pass --dpi to give a resolution.`,
     )
-  if (t.more) err(`the file has more pages than the limit, and only the first ${t.pages.length} were read. --max-pages raises it`)
+  if (t.more && !t.failed) err(`the file has more pages than the limit, and only the first ${t.pages.length} were read. --max-pages raises it`)
   if (t.damage) err(`the file's chain of pages ends early (${t.damage}), so any page after the last one found is missing`)
   if (t.failed) err(`page ${t.failed.page} could not be read: ${WHY[t.failed.kind] ?? t.failed.kind}${t.failed.detail ? ` (${t.failed.detail})` : ''}`)
   return t.failed || t.more || t.damage ? 1 : 0

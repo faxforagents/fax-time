@@ -72,3 +72,18 @@ test('a resolution too small to give a size refuses the page and places no empty
   const p = place(215, 1, 3.85, LINE, TOLERANCE, { width: 1727.5, height: 3.5 })
   assert.deepEqual(p, { cols: 1728, left: 0, lines: 4 })
 })
+
+test('the 1% tolerance is held to the size before rounding, and a half line rounds up', () => {
+  // 1100 rows at 98.76 per inch is 0.992% more than 3.85 lines a millimetre gives: within the 1%, so kept.
+  const near = codeBitmap({ width: 1728, height: 1100, pixels: new Uint8Array(1728 * 1100), dpi: { x: 205, y: 98.76 } })
+  assert.equal(near.standard.length, 1100)
+  // 2005 fine rows are 1002.5 standard lines, which round to 1003.
+  const half = codeBitmap({ width: 1728, height: 2005, pixels: new Uint8Array(1728 * 2005), dpi: { x: 204, y: 196 } })
+  assert.deepEqual([half.fine.length, half.standard.length], [2005, 1003])
+})
+
+test('a pel a hair darker than mid-grey is black, and mid-grey itself is white', () => {
+  const one = { cols: 1, left: 0, lines: 1 }
+  assert.deepEqual([...toPels(new Float64Array([127.4999999]), 1, 1, one, { pels: 1, mm: 1 })], [1])
+  assert.deepEqual([...toPels(new Float64Array([127.5]), 1, 1, one, { pels: 1, mm: 1 })], [0])
+})

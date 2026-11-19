@@ -235,3 +235,13 @@ if (!SCAN_TIMES.some((t) => t.ms === 0)) fail('no 0 ms time for a rate with erro
 export const DEFAULT_RATE = RATES.find((r) => r.default) as Rate
 /** The minimum scan line time when none is given: 20 ms, or 0 ms at a rate with error correction. */
 export const DEFAULT_SCAN_TIME = SCAN_TIMES.find((t) => t.default) as ScanTime
+
+/** Freezes a value and all it holds, so no caller can change a figure this module has read and checked. */
+export function deepFreeze<T>(x: T): T {
+  if (x !== null && typeof x === 'object' && !Object.isFrozen(x)) {
+    Object.freeze(x)
+    for (const v of Object.values(x)) deepFreeze(v)
+  }
+  return x
+}
+for (const x of [TEXTS, MODEMS, QUOTES, LINE, RESOLUTIONS, EQUIVALENT, CODES, DECODE, RATES, SCAN_TIMES]) deepFreeze(x)

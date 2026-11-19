@@ -54,6 +54,12 @@ test('8-bit grey and colour pages: polarity, BT.601 luma, alpha over white and t
   const rgb = await grey(tiffWithStrip(2, 1, { 258: [3, [8, 8, 8]], 259: [3, [1]], 262: [3, [2]], 277: [3, [3]] }, new Uint8Array([255, 0, 0, 0, 0, 255])))
   assert.deepEqual([...rgb.grey], [Math.round(0.299 * 255), Math.round(0.114 * 255)])
   // Unassociated alpha (ExtraSamples 2): a black pixel at half alpha over white paper is mid-grey.
+  // Associated alpha (ExtraSamples 1) with WhiteIsZero: ink 170 premultiplied by alpha 170/255 is black at
+  // two thirds over white paper, so grey 85.
+  const inked = await grey(tiffWithStrip(1, 1, { 258: [3, [8, 8]], 259: [3, [1]], 262: [3, [0]], 277: [3, [2]], 338: [3, [1]] }, new Uint8Array([170, 170])))
+  assert.deepEqual([...inked.grey], [85])
+  const lit = await grey(tiffWithStrip(1, 1, { 258: [3, [8, 8]], 259: [3, [1]], 262: [3, [1]], 277: [3, [2]], 338: [3, [1]] }, new Uint8Array([0, 170])))
+  assert.deepEqual([...lit.grey], [85])
   const rgba = await grey(
     tiffWithStrip(1, 1, { 258: [3, [8, 8, 8, 8]], 259: [3, [1]], 262: [3, [2]], 277: [3, [4]], 338: [3, [2]] }, new Uint8Array([0, 0, 0, 128])),
   )

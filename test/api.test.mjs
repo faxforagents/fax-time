@@ -5,7 +5,22 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { after, test } from 'node:test'
 import { pathToFileURL } from 'node:url'
-import { codeBitmap, codeFile, DEFAULT_LIMITS, FormatError, faxTime, LENGTHS, lineBits, runBits, timePage } from '../dist/index.js'
+import { runInNewContext } from 'node:vm'
+import {
+  CODES,
+  codeBitmap,
+  codeFile,
+  DEFAULT_LIMITS,
+  FormatError,
+  faxTime,
+  LENGTHS,
+  lineBits,
+  RATES,
+  RESOLUTIONS,
+  runBits,
+  settings,
+  timePage,
+} from '../dist/index.js'
 import { fixture, ROOT } from './helpers.mjs'
 
 const dir = mkdtempSync(join(tmpdir(), 'fax-time-api-'))
@@ -76,4 +91,29 @@ test('the module will not load when a quote no longer says its figure', async ()
   assert.notEqual(changed, text)
   writeFileSync(data, changed)
   await assert.rejects(import(pathToFileURL(join(copy, 'standards.js')).href), /t4-rtc no longer says what this module reads from it/)
+})
+
+test('the exported figures are frozen, so a caller cannot reorder or change them', () => {
+  assert.throws(() => RESOLUTIONS.reverse(), TypeError)
+  assert.throws(() => {
+    RATES[0].bps = 1
+  }, TypeError)
+  assert.throws(() => {
+    CODES.white.terminating[0] = '1'
+  }, TypeError)
+  assert.equal(RESOLUTIONS[0].id, 'standard')
+})
+
+test('bytes and pixels made in another realm, such as a vm context, are taken as such', async () => {
+  const file = runInNewContext('new Uint8Array([0x50, 0x31, 0x0a, 0x32, 0x20, 0x32, 0x0a, 0x30, 0x31, 0x0a, 0x31, 0x30, 0x0a])')
+  const here = new Uint8Array([...file])
+  const a = await faxTime(file, { dpi: { x: 200, y: 100 } })
+  const b = await faxTime(here, { dpi: { x: 200, y: 100 } })
+  assert.equal(a.bits, b.bits)
+  const pixels = runInNewContext('new Uint8Array(4).fill(1)')
+  assert.equal(codeBitmap({ width: 2, height: 2, pixels, dpi: { x: 204, y: 98 } }).standard.length, 2)
+})
+
+test('a rate outside the list is named as one this package does not work with', () => {
+  assert.throws(() => settings({ bps: 28800, ms: 0 }), /not one of the rates this package works with/)
 })

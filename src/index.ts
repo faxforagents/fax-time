@@ -16,6 +16,7 @@ import {
   DECODE,
   DEFAULT_RATE,
   DEFAULT_SCAN_TIME,
+  deepFreeze,
   EQUIVALENT,
   LINE,
   RATES,
@@ -79,7 +80,7 @@ export { type Damage, type Rational, readTiff, type TiffError, type TiffPage, Ti
 export { VERSION } from './version.js'
 
 /** The bit lengths of Tables 2 and 3a and of the EOL. */
-export const LENGTHS = lengthsOf(CODES)
+export const LENGTHS = deepFreeze(lengthsOf(CODES))
 const DECODER = decoder({ ...CODES, extended: DECODE.extended, modes: DECODE.modes })
 
 /**
@@ -112,9 +113,11 @@ const limitsOf = (l: Partial<Limits> = {}): Limits => {
   return out
 }
 
+const linesPerMm = (id: ResolutionId): number => (RESOLUTIONS.find((r) => r.id === id) as { linesPerMm: number }).linesPerMm
+
 const pageSettings = (limits: Limits): PageSettings => ({
   line: LINE,
-  linesPerMm: { standard: (RESOLUTIONS[0] as { linesPerMm: number }).linesPerMm, fine: (RESOLUTIONS[1] as { linesPerMm: number }).linesPerMm },
+  linesPerMm: { standard: linesPerMm('standard'), fine: linesPerMm('fine') },
   tolerance: TOLERANCE,
   maxPixels: limits.maxPixels,
   equivalent: EQUIVALENT,
@@ -137,7 +140,11 @@ export interface Settings {
 export function settings(s: Partial<Settings> = {}): Settings {
   const bps = s.bps ?? DEFAULT_RATE.bps
   const rate = RATES.find((r) => r.bps === bps)
-  if (!rate) throw new RangeError(`${bps} bit/s is not a rate of T.30 Table 2 or V.34. The rates are ${RATES.map((r) => r.bps).join(', ')}`)
+  if (!rate) {
+    throw new RangeError(
+      `${bps} bit/s is not one of the rates this package works with: the DCS rates of T.30 Table 2 and the top rate of V.34, ${RATES.map((r) => r.bps).join(', ')}`,
+    )
+  }
   const ms = s.ms ?? (rate.ecm ? 0 : DEFAULT_SCAN_TIME.ms)
   if (!SCAN_TIMES.some((t) => t.ms === ms))
     throw new RangeError(`${ms} ms is not a minimum scan line time of T.4 3.1. The times are ${SCAN_TIMES.map((t) => t.ms).join(', ')}`)
@@ -201,6 +208,10 @@ export interface CodeOptions {
   dpi?: Dpi | null
 }
 
+/** The kind of a value as its own realm names it, so a Uint8Array made in another realm, such as a vm context, counts. */
+const tag = (x: unknown): string => Object.prototype.toString.call(x).slice(8, -1)
+const isBytes = (x: unknown, clamped: boolean): boolean => tag(x) === 'Uint8Array' || (clamped && tag(x) === 'Uint8ClampedArray')
+
 const checkDpi = (dpi: Dpi | null | undefined): Dpi | null => {
   if (dpi == null) return null
   if (!(Number.isFinite(dpi.x) && dpi.x > 0 && Number.isFinite(dpi.y) && dpi.y > 0)) throw new RangeError(`a resolution of ${dpi.x} by ${dpi.y} per inch`)
@@ -219,7 +230,7 @@ export function codeBitmap(bitmap: Bitmap, options: CodeOptions & { page?: numbe
   const { width, height, pixels } = bitmap
   if (!Number.isInteger(width) || !Number.isInteger(height) || width < 1 || height < 1) throw new PageError('no-size')
   if (width * height > limits.maxPixels) throw new PageError('too-large')
-  if (!(pixels instanceof Uint8Array || pixels instanceof Uint8ClampedArray)) throw new RangeError('the pixels are not a Uint8Array')
+  if (!isBytes(pixels, true)) throw new RangeError('the pixels are not a Uint8Array')
   if (pixels.length < width * height) throw new RangeError('fewer pixels than the page size')
   const dpi = checkDpi(bitmap.dpi ?? options.dpi)
   const grey = new Uint8Array(width * height)
@@ -353,8 +364,8 @@ export function timeFile(file: CodedFile, s: Partial<Settings> = {}): FileTime {
  */
 export async function faxTime(input: Uint8Array | ArrayBuffer | Bitmap, options: Partial<Settings> & CodeOptions = {}): Promise<FileTime> {
   const s = settings(options)
-  if (input instanceof ArrayBuffer) return timeFile(await codeFile(new Uint8Array(input), options), s)
-  if (input instanceof Uint8Array) return timeFile(await codeFile(input, options), s)
-  const page = timePage(codeBitmap(input, options), s)
+  if (tag(input) === 'ArrayBuffer') return timeFile(await codeFile(new Uint8Array(input as ArrayBuffer), options), s)
+  if (isBytes(input, false)) return timeFile(await codeFile(input as Uint8Array, options), s)
+  const page = timePage(codeBitmap(input as Bitmap, options), s)
   return { format: 'bitmap', settings: s, pages: [page], bits: page.bits, seconds: page.seconds, more: false, damage: null, failed: null }
 }

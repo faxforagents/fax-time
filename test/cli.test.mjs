@@ -105,6 +105,9 @@ test('a page that is not read, a page limit reached or a damaged page chain exit
   writeFileSync(broken, cut)
   const b = run(broken)
   assert.deepEqual([b.status, /page 2 could not be read/.test(b.stderr)], [1, true])
+  // When a page stopped the reading, the page limit is not blamed for it.
+  const both = run('--max-pages', '2', broken)
+  assert.deepEqual([both.status, /page 2 could not be read/.test(both.stderr), /only the first/.test(both.stderr)], [1, true, false])
   assert.match(b.stdout, /^page 1: /m)
   // The last page's next-IFD offset pointing back at the first page.
   const looped = Buffer.from(bytes)
